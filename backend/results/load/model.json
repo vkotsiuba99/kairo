@@ -1,0 +1,67 @@
+{
+  "measured": [
+    {
+      "users": 50,
+      "rps": 15.7,
+      "mean_response_s": 2.19,
+      "cpu_cores": 8.9,
+      "cpu_by_service": {
+        "frontend": 0.02,
+        "publisher": 0.17,
+        "worker-telemetry": 0.19,
+        "api": 8.05,
+        "mock-social": 0.07,
+        "worker-tts": 0.2,
+        "postgres": 0.2
+      },
+      "cpu_core_s_per_request": 0.569
+    },
+    {
+      "users": 100,
+      "rps": 16.0,
+      "mean_response_s": 5.27,
+      "cpu_cores": 11.96,
+      "cpu_by_service": {
+        "frontend": 0.02,
+        "worker-telemetry": 0.16,
+        "api": 11.09,
+        "publisher": 0.12,
+        "worker-tts": 0.27,
+        "postgres": 0.23,
+        "mock-social": 0.07
+      },
+      "cpu_core_s_per_request": 0.75
+    }
+  ],
+  "model": [
+    {
+      "users": 200,
+      "rps": 16.0,
+      "mean_response_s": 11.5,
+      "p95_read_ms": 41509,
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 7.9
+    },
+    {
+      "users": 400,
+      "rps": 16.0,
+      "mean_response_s": 24.1,
+      "p95_read_ms": ">60 s (timeout)",
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 13.3
+    },
+    {
+      "users": 800,
+      "rps": 16.0,
+      "mean_response_s": 49.1,
+      "p95_read_ms": ">60 s (timeout)",
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 21.5
+    }
+  ],
+  "validation": {
+    "predicted_mean_response_s": 5.39,
+    "measured_mean_response_s": 5.27,
+    "error_pct": 2.3
+  }
+}

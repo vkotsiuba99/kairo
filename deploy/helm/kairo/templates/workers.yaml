@@ -1,0 +1,28 @@
+{{- $root := . }}
+{{- range $name, $spec := dict "publisher" (dict "script" "scripts/worker_publisher.py" "values" .Values.publisher) "telemetry" (dict "script" "scripts/worker_telemetry.py" "values" .Values.telemetry) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $root.Release.Name }}-{{ $name }}
+  labels: {{- include "kairo.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $spec.values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels: {{- include "kairo.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: "{{ $root.Values.image.backend }}:{{ $root.Values.image.tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["python", "{{ $spec.script }}"]
+          {{- include "kairo.backendEnv" $root | nindent 10 }}
+          resources: {{- toYaml $spec.values.resources | nindent 12 }}
+{{- end }}

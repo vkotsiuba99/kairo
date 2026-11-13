@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# Secrets and local configuration (.env.example is a template without real values)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+*.credentials
+
+# Runtime data: SQLite databases, generated media, local archive, collector cursors
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+*.cursor
+
+# Logs
+*.log
+
+# Infrastructure state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tgz
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

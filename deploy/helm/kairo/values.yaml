@@ -1,0 +1,56 @@
+# Образи з ECR (outputs.ecr_repositories з terraform)
+image:
+  backend: 000000000000.dkr.ecr.eu-central-1.amazonaws.com/kairo-backend
+  frontend: 000000000000.dkr.ecr.eu-central-1.amazonaws.com/kairo-frontend
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 3
+  workers: 2               # процеси uvicorn у поді
+  resources:
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  minAvailable: 2          # PodDisruptionBudget: оновлення й відмови вузла не гасять API повністю
+
+publisher:
+  replicas: 2              # атомарне захоплення дописів — дублікатів не буде
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+
+telemetry:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+
+frontend:
+  replicas: 2
+
+ingress:
+  className: alb            # AWS Load Balancer Controller
+  host: kairo.example.com
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+
+database:
+  host: kairo-pg.xxxxxxxx.eu-central-1.rds.amazonaws.com   # outputs.database_host
+  port: "5432"
+  name: kairo
+  user: kairo
+  password: ""             # передається з CI: --set database.password=...
+
+config:
+  LLM_BASE_URL: http://lm-studio.internal:1234/v1
+  LLM_MODEL_NAME: ternary-bonsai-27b
+  PUBLIC_BASE_URL: https://kairo.example.com
+  SCHEDULER_INTERVAL_SECONDS: "15"
+  TELEMETRY_POLL_SECONDS: "300"
+
+secrets:
+  ENCRYPTION_KEY: ""
+  OPENROUTER_API_KEY: ""

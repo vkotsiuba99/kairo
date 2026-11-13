@@ -1,0 +1,60 @@
+{
+  "users": 100,
+  "duration_s": 300,
+  "t0_epoch": 1794348049.443,
+  "requests": 4787,
+  "rps": 15.5,
+  "operations": {
+    "dashboard": {
+      "count": 784,
+      "rps": 2.54,
+      "p50_ms": 894.2,
+      "p95_ms": 22309.8,
+      "p99_ms": 40302.2,
+      "error_rate": 0.0
+    },
+    "generate": {
+      "count": 757,
+      "rps": 2.45,
+      "p50_ms": 8251.0,
+      "p95_ms": 36772.5,
+      "p99_ms": 49083.6,
+      "error_rate": 0.1876
+    },
+    "list_content": {
+      "count": 1595,
+      "rps": 5.16,
+      "p50_ms": 211.7,
+      "p95_ms": 14857.1,
+      "p99_ms": 34370.2,
+      "error_rate": 0.0006
+    },
+    "list_queue": {
+      "count": 538,
+      "rps": 1.74,
+      "p50_ms": 176.2,
+      "p95_ms": 16095.1,
+      "p99_ms": 30770.3,
+      "error_rate": 0.0
+    },
+    "schedule": {
+      "count": 422,
+      "rps": 1.37,
+      "p50_ms": 921.5,
+      "p95_ms": 23261.3,
+      "p99_ms": 34296.4,
+      "error_rate": 0.0284
+    },
+    "telemetry": {
+      "count": 691,
+      "rps": 2.24,
+      "p50_ms": 1308.6,
+      "p95_ms": 23599.1,
+      "p99_ms": 40531.7,
+      "error_rate": 0.0535
+    }
+  },
+  "p95_ms": 24223.4,
+  "error_rate": 0.0401,
+  "published_during_test": 411
+}

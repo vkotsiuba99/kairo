@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kairo
+description: Kairo — система генерації адаптивного контенту на основі профілів аудиторії
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,77 @@
+{
+  "pages": 2000,
+  "rounds": 20000,
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "alpha": 0.6,
+  "oracle_reward_mean": 19583.5,
+  "policies": {
+    "bandit": {
+      "cumulative_reward_mean": 18611.7,
+      "cumulative_reward_std": 135.8,
+      "cumulative_regret_mean": 546.2,
+      "cumulative_regret_std": 107.6,
+      "avg_reward": 0.9306,
+      "optimal_share_last10pct": {
+        "topic": 1.0,
+        "format": 0.61,
+        "tone": 0.5,
+        "length": 0.431,
+        "time_slot": 0.873,
+        "backend": 0.607
+      },
+      "share_of_oracle": 0.95
+    },
+    "random": {
+      "cumulative_reward_mean": 11647.3,
+      "cumulative_reward_std": 5.8,
+      "cumulative_regret_mean": 7518.3,
+      "cumulative_regret_std": 22.0,
+      "avg_reward": 0.5824,
+      "optimal_share_last10pct": {
+        "topic": 0.195,
+        "format": 0.247,
+        "tone": 0.251,
+        "length": 0.337,
+        "time_slot": 0.25,
+        "backend": 0.501
+      },
+      "share_of_oracle": 0.595
+    },
+    "fixed_heuristic": {
+      "cumulative_reward_mean": 11338.3,
+      "cumulative_reward_std": 43.2,
+      "cumulative_regret_mean": 7816.8,
+      "cumulative_regret_std": 35.9,
+      "avg_reward": 0.5669,
+      "optimal_share_last10pct": {
+        "topic": 0.196,
+        "format": 0.312,
+        "tone": 0.371,
+        "length": 0.318,
+        "time_slot": 0.42,
+        "backend": 0.0
+      },
+      "share_of_oracle": 0.579
+    },
+    "greedy_avg": {
+      "cumulative_reward_mean": 10329.9,
+      "cumulative_reward_std": 57.0,
+      "cumulative_regret_mean": 8869.1,
+      "cumulative_regret_std": 37.4,
+      "avg_reward": 0.5165,
+      "optimal_share_last10pct": {
+        "topic": 0.196,
+        "format": 0.312,
+        "tone": 0.371,
+        "length": 0.434,
+        "time_slot": 0.18,
+        "backend": 0.0
+      },
+      "share_of_oracle": 0.527
+    }
+  }
+}

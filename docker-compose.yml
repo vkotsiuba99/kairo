@@ -1,0 +1,114 @@
+services:
+  # Database with pgvector extension (вона ж — черга публікацій, таблиця posts)
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kairo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairo_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-kairo}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kairo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI REST and WebSocket Gateway. Без container_name — масштабується
+  # (docker compose up --scale api=3), nginx розподіляє запити між репліками.
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    env_file:
+      - path: .env
+        required: false
+    environment: &backend-env
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-kairo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairo_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-kairo}
+      USE_SQLITE_FALLBACK: "false"
+      RUN_SCHEDULER_IN_API: "false"       # публікує окремий сервіс publisher
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-ternary-bonsai-27b}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      TTS_SERVICE_URL: http://worker-tts:8001
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+    volumes:
+      - shared_media:/app/data/media
+      - shared_archive:/app/data/archive
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Публікатор: забирає з черги дописи, час яких настав (атомарне захоплення —
+  # кілька реплік не публікують той самий допис двічі).
+  publisher:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "scripts/worker_publisher.py"]
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    volumes:
+      - shared_media:/app/data/media
+      - shared_archive:/app/data/archive
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Збір телеметрії з усіх каналів і перерахунок винагороди політики
+  worker-telemetry:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "scripts/worker_telemetry.py"]
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # TTS Service (CPU-only speech synthesis for YouTube video composition)
+  worker-tts:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "scripts/worker_tts.py"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  shared_media:
+  shared_archive:

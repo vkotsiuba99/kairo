@@ -1,0 +1,68 @@
+# Навантажувальний стенд: усі зовнішні мережі й LLM замінено мок-провайдером.
+#
+#   docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml \
+#       up -d --build --scale api=3 --scale publisher=2
+#   docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml \
+#       run --rm --no-deps loadgen python scripts/loadtest.py --setup --users 200 --duration 300 \
+#       --base-url http://frontend/api/v1 --out results/load/u200
+#   # chaos — паралельно з навантаженням, з хоста:
+#   python backend/scripts/chaos.py --project kairo --services api publisher worker-telemetry
+#   # прибирання (диск Docker):
+#   docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml down -v --rmi all
+x-mock-env: &mock-env
+  TELEGRAM_API_BASE: http://mock-social:9100/telegram
+  GRAPH_API_BASE: http://mock-social:9100/graph
+  TIKTOK_API_BASE: http://mock-social:9100/tiktok
+  GOOGLE_API_BASE: http://mock-social:9100/google
+  GOOGLE_OAUTH_TOKEN_URL: http://mock-social:9100/google/token
+  LLM_BASE_URL: http://mock-social:9100/llm/v1
+  LLM_MODEL_NAME: mock-llm
+  LLM_EMBEDDING_MODEL: mock-embed
+  PUBLIC_BASE_URL: http://frontend
+  KAIRO_IMAGE_TIER: poster          # без мережевих генераторів зображень
+  SCHEDULER_INTERVAL_SECONDS: "2"
+  PUBLISH_RETRY_BASE_SECONDS: "5"
+  PUBLISH_CLAIM_TIMEOUT_SECONDS: "60"
+  TELEMETRY_POLL_SECONDS: "20"
+  BANDIT_STATE_TTL_SECONDS: "10"
+
+services:
+  mock-social:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "mock_social.app:app", "--host", "0.0.0.0", "--port", "9100"]
+    environment:
+      MOCK_LATENCY_MS: "80"
+      MOCK_LLM_LATENCY_MS: "600"
+      MOCK_ERROR_RATE: "0.02"
+      MOCK_TIME_SCALE: "60"
+      MOCK_DATASET: /app/datasets/pages_2000.csv
+
+  api:
+    environment:
+      <<: *mock-env
+    depends_on:
+      - mock-social
+
+  publisher:
+    environment:
+      <<: *mock-env
+
+  worker-telemetry:
+    environment:
+      <<: *mock-env
+
+  # Генератор навантаження в тій самій мережі (звертається через nginx)
+  loadgen:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ["loadtest"]
+    environment:
+      MOCK_URL: http://mock-social:9100
+    volumes:
+      - ./backend/results:/app/results
+    depends_on:
+      - frontend

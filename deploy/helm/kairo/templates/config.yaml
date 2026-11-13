@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  labels: {{- include "kairo.labels" . | nindent 4 }}
+data:
+  POSTGRES_SERVER: {{ .Values.database.host | quote }}
+  POSTGRES_PORT: {{ .Values.database.port | quote }}
+  POSTGRES_DB: {{ .Values.database.name | quote }}
+  POSTGRES_USER: {{ .Values.database.user | quote }}
+  USE_SQLITE_FALLBACK: "false"
+  RUN_SCHEDULER_IN_API: "false"
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-secrets
+  labels: {{- include "kairo.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ required "database.password is required" .Values.database.password | quote }}
+  ENCRYPTION_KEY: {{ required "secrets.ENCRYPTION_KEY is required" .Values.secrets.ENCRYPTION_KEY | quote }}
+  OPENROUTER_API_KEY: {{ .Values.secrets.OPENROUTER_API_KEY | quote }}
