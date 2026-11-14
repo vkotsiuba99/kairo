@@ -88,10 +88,18 @@ def report(run: str) -> Dict[str, Any]:
             windows.append((k, s + 15))
             win = [r for r in rows if k <= r["t"] <= s + 15]
             fails = [r for r in win if not r["ok"]]
-            d = per.setdefault(e["service"], {"kills": 0, "win_req": 0, "win_err": 0, "impact_s": []})
+            d = per.setdefault(e["service"], {"kills": 0, "win_req": 0, "win_err": 0, "impact_s": [],
+                                              "ops": {}, "pub_during": 0, "pub_after_60s": 0})
             d["kills"] += 1
             d["win_req"] += len(win)
             d["win_err"] += len(fails)
+            for r in win:  # які операції зачепила відмова, а які працювали далі
+                n, f = d["ops"].get(r["op"], (0, 0))
+                d["ops"][r["op"]] = (n + 1, f + (not r["ok"]))
+            if posts_path and os.path.exists(posts_path):
+                pub_t = [float(p["published"]) for p in posts if p["published"]]
+                d["pub_during"] += sum(1 for t in pub_t if k <= t <= s)
+                d["pub_after_60s"] += sum(1 for t in pub_t if s < t <= s + 60)
             # how long requests kept failing after the kill (0 = nobody noticed)
             d["impact_s"].append(round(max(r["t"] for r in fails) - k, 1) if fails else 0.0)
             if posts_path and os.path.exists(posts_path):
@@ -106,6 +114,9 @@ def report(run: str) -> Dict[str, Any]:
                 "error_pct_in_window": round(100 * d["win_err"] / max(d["win_req"], 1), 2),
                 "impact_max_s": max(d["impact_s"]),
                 "publish_lag_max_s": round(max(d.get("lag_in_window") or [0.0]), 1),
+                "error_pct_by_op": {op: round(100 * f / n, 1) for op, (n, f) in sorted(d["ops"].items())},
+                "published_during_outage": d["pub_during"],
+                "published_60s_after": d["pub_after_60s"],
             } for svc, d in sorted(per.items())
         }
     return out

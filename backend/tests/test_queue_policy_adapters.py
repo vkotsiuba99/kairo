@@ -139,8 +139,8 @@ async def test_failed_publication_is_retried_then_marked_failed(maker, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_unavailable_publishing_service_is_a_failed_attempt(maker, monkeypatch):
-    """Якщо Publishing недоступний, допис не губиться: це звичайна невдала спроба з повтором."""
+async def test_unavailable_publishing_keeps_post_queued_without_spending_attempts(maker, monkeypatch):
+    """Недоступний Publishing — не відмова мережі: допис лишається в черзі, спроби не витрачаються."""
     from app.core.clients import ServiceError
 
     async def down(*args, **kwargs):
@@ -150,10 +150,12 @@ async def test_unavailable_publishing_service_is_a_failed_attempt(maker, monkeyp
     monkeypatch.setattr(runner, "AsyncSessionLocal", maker)
     monkeypatch.setattr(runner, "call", down)
     monkeypatch.setattr(settings, "PUBLISH_RETRY_BASE_SECONDS", 0)
-    assert await runner.publish_due_posts() == 0
+    monkeypatch.setattr(settings, "PUBLISH_MAX_ATTEMPTS", 1)
+    for _ in range(3):  # будь-яка кількість циклів за відмови сервісу
+        assert await runner.publish_due_posts() == 0
     async with maker() as db:
         post = (await db.execute(select(Post))).scalar_one()
-        assert (post.status, post.attempts) == ("pending", 1)
+        assert (post.status, post.attempts) == ("pending", 0)
         assert "unavailable" in post.error_message
 
 

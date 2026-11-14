@@ -13,6 +13,8 @@
 сервісу Scheduler не публікують той самий допис двічі; саму публікацію
 виконує сервіс Publishing.
 Допис, захоплений воркером, який упав, повертається в чергу за тайм-аутом.
+Недоступність сервісу Publishing — інфраструктурна відмова, а не відмова мережі:
+допис повертається в чергу без витрати спроби й піде, щойно сервіс оживе.
 Гарантія — «щонайменше один раз»: падіння між відповіддю платформи і
 фіксацією в БД може дати повтор.
 """
@@ -33,6 +35,9 @@ from app.core.database import AsyncSessionLocal
 from app.models.entities import Post
 
 logger = logging.getLogger("kairo.scheduler")
+
+# Коди, з якими інший сервіс «недоступний»: 503 — немає з'єднання, 502/504 — шлюз або тайм-аут
+UNAVAILABLE = {502, 503, 504}
 
 
 async def publish_post(db: AsyncSession, post: Post) -> PublishResult:
@@ -61,8 +66,12 @@ async def publish_post(db: AsyncSession, post: Post) -> PublishResult:
             url=res.get("url"),
             error_message=res.get("error_message"),
         )
-    except ServiceError as e:  # Publishing недоступний — звичайна помилка спроби, буде повтор
+    except ServiceError as e:
         result = PublishResult(success=False, error_message=str(e.detail))
+        if e.status_code in UNAVAILABLE:  # сервіс лежить — мережа допис не відхиляла
+            result.metadata["retry_later"] = True
+            post.error_message = result.error_message
+            return result
 
     post.attempts = (post.attempts or 0) + 1
     if result.success:
@@ -110,7 +119,11 @@ async def _publish_claimed(post_id: int, sem: asyncio.Semaphore) -> bool:
     async with sem, AsyncSessionLocal() as db:
         post = (await db.execute(select(Post).where(Post.id == post_id))).scalar_one()
         result = await publish_post(db, post)
-        if not result.success:
+        if result.metadata.get("retry_later"):
+            post.status = "pending"
+            post.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=settings.PUBLISH_RETRY_BASE_SECONDS)
+            logger.warning("Post #%d: Publishing unavailable, back to the queue", post.id)
+        elif not result.success:
             if post.attempts < settings.PUBLISH_MAX_ATTEMPTS:
                 delay = settings.PUBLISH_RETRY_BASE_SECONDS * 2 ** (post.attempts - 1)
                 post.status = "pending"

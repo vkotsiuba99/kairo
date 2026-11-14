@@ -119,3 +119,23 @@ async def test_media_limits_concurrent_generations(monkeypatch):
         ))
     assert all(r.status_code == 200 for r in responses)
     assert state["max"] == settings.MEDIA_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_scheduler_queues_with_last_known_channels_when_publishing_is_down(monkeypatch):
+    """Відмова Publishing не зупиняє постановку в чергу: Scheduler бере останній відомий список каналів."""
+    from app.api.v1 import schedule
+    from app.core.clients import ServiceError
+
+    accounts = [{"id": 1, "platform_code": "telegram", "external_account_id": "@c", "status": "active"}]
+
+    async def up(*args, **kwargs):
+        return accounts
+
+    async def down(*args, **kwargs):
+        raise ServiceError("publishing", 503, "The publishing service is unavailable")
+
+    monkeypatch.setattr(schedule, "call", up)
+    assert await schedule._accounts() == accounts
+    monkeypatch.setattr(schedule, "call", down)
+    assert await schedule._accounts() == accounts  # сервіс лежить — працюємо з відомим списком

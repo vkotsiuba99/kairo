@@ -37,8 +37,19 @@ async def _content(item_id: int) -> Dict[str, Any]:
         raise
 
 
+_known_accounts: List[Dict[str, Any]] = []
+
+
 async def _accounts() -> List[Dict[str, Any]]:
-    return await call("publishing", "GET", "/accounts")
+    # Якщо Publishing лежить, черга приймає дописи за останнім відомим списком каналів:
+    # публікацію однаково виконає Publishing, коли повернеться
+    global _known_accounts
+    try:
+        _known_accounts = await call("publishing", "GET", "/accounts")
+    except ServiceError as e:
+        if e.status_code < 500 or not _known_accounts:
+            raise
+    return _known_accounts
 
 
 async def _account(account_id: int) -> Dict[str, Any]:
@@ -116,6 +127,13 @@ async def list_scheduled_posts(status: str = None, limit: int = 200, db: AsyncSe
 
 async def _publish_now(db: AsyncSession, post: Post) -> Dict[str, Any]:
     result = await publish_post(db, post)
+    if result.metadata.get("retry_later"):
+        post.status = "pending"  # диспетчер опублікує, щойно Publishing повернеться
+        await db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="The publishing service is unavailable; the post stays in the queue and will be published later",
+        )
     if not result.success:
         post.status = "failed"
     await db.commit()
