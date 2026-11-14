@@ -194,6 +194,25 @@ separate video worker, not a bigger database. The first runs exposed four defect
 spinning 16 threads per process (`OPENBLAS_NUM_THREADS=1` in the image), and `docker compose run`
 resetting the API scale (`--no-deps`). Larger runs and the chaos scenario were not executed locally.
 
+Version 2 (six services) on the same machine: content 3 replicas, scheduler, publishing and media 2 each,
+telemetry and trends 1, two uvicorn workers per replica, 300 s (`backend/results/load/v2`):
+
+| Users | RPS | Mean response | p95 read | p95 generate | Errors | Published / lost / duplicate |
+|---|---|---|---|---|---|---|
+| 50 | 12.8 | 2.9 s | 0.65 s | 44.9 s | 1.3 % | 388 / 0 / 2 |
+| 100 (model) | 12.8 | 6.8 s | 1.5 s | > 60 s | ≈ 3.7 % | — |
+| 200 (model) | 12.8 | 14.6 s | 3.3 s | > 60 s | ≈ 9.2 % | — |
+| 400 (model) | 12.8 | 30.3 s | 6.8 s | > 60 s | ≈ 12.9 % | — |
+
+Reads are about 5× faster than in version 1 (p95 3.2 s → 0.65 s) because media generation no longer
+competes with them for CPU, and publish lag dropped from 1.9/8.4 s to 1.0/3.2 s (p50/p95). Throughput is
+lower on one machine: 22 service processes, the broker and five databases cost more CPU (0.95 core·s per
+request: media 6.8 cores, content 1.9, RabbitMQ 1.6, PostgreSQL 0.33) and filled all 7.4 GB of Docker
+memory. The first v2 run (`v2/u50_unbounded`) exposed a fifth defect: the media service did not limit
+concurrent generations, each process rendered dozens of images and videos at once and the containers
+peaked at 2.7 GB; `MEDIA_CONCURRENCY` (3 per process) fixed it. Only the 50-user scenario was measured;
+100–400 users are the operational-law model (`v2/model.json`).
+
 ## Deployment
 
 `deploy/terraform` describes AWS infrastructure: VPC, EKS, RDS for PostgreSQL 16 (one server, a
