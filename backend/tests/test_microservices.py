@@ -123,19 +123,23 @@ async def test_media_limits_concurrent_generations(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scheduler_queues_with_last_known_channels_when_publishing_is_down(monkeypatch):
-    """Відмова Publishing не зупиняє постановку в чергу: Scheduler бере останній відомий список каналів."""
+    """Відмова Publishing не зупиняє постановку в чергу: канали, відомі з черги, приймаються далі."""
+    from datetime import datetime, timezone
+
     from app.api.v1 import schedule
     from app.core.clients import ServiceError
+    from app.core.init_db import init_db
+    from app.models.entities import Post
 
-    accounts = [{"id": 1, "platform_code": "telegram", "external_account_id": "@c", "status": "active"}]
-
-    async def up(*args, **kwargs):
-        return accounts
+    await init_db()
 
     async def down(*args, **kwargs):
         raise ServiceError("publishing", 503, "The publishing service is unavailable")
 
-    monkeypatch.setattr(schedule, "call", up)
-    assert await schedule._accounts() == accounts
     monkeypatch.setattr(schedule, "call", down)
-    assert await schedule._accounts() == accounts  # сервіс лежить — працюємо з відомим списком
+    async with AsyncSessionLocal() as db:
+        db.add(Post(content_item_id=1, connected_account_id=4242, platform_code="telegram",
+                    account_label="@chan", scheduled_at=datetime.now(timezone.utc), status="published"))
+        await db.commit()
+        acc = await schedule._account(db, 4242)  # сервіс лежить — канал відомий з власної черги
+    assert (acc["platform_code"], acc["external_account_id"]) == ("telegram", "@chan")

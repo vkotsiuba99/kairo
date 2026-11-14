@@ -37,23 +37,27 @@ async def _content(item_id: int) -> Dict[str, Any]:
         raise
 
 
-_known_accounts: List[Dict[str, Any]] = []
-
-
-async def _accounts() -> List[Dict[str, Any]]:
-    # Якщо Publishing лежить, черга приймає дописи за останнім відомим списком каналів:
-    # публікацію однаково виконає Publishing, коли повернеться
-    global _known_accounts
+async def _accounts(db: AsyncSession) -> List[Dict[str, Any]]:
+    """
+    Канали з Publishing. Якщо він лежить, черга приймає дописи за каналами, уже відомими з
+    її власної таблиці (вона спільна для всіх реплік): публікацію виконає Publishing, коли повернеться.
+    """
     try:
-        _known_accounts = await call("publishing", "GET", "/accounts")
+        return await call("publishing", "GET", "/accounts")
     except ServiceError as e:
-        if e.status_code < 500 or not _known_accounts:
+        if e.status_code < 500:
             raise
-    return _known_accounts
+        known = (
+            await db.execute(select(Post.connected_account_id, Post.platform_code, Post.account_label).distinct())
+        ).all()
+        if not known:
+            raise
+        return [{"id": a, "platform_code": code, "external_account_id": label, "status": "active"}
+                for a, code, label in known]
 
 
-async def _account(account_id: int) -> Dict[str, Any]:
-    acc = next((a for a in await _accounts() if a["id"] == account_id), None)
+async def _account(db: AsyncSession, account_id: int) -> Dict[str, Any]:
+    acc = next((a for a in await _accounts(db) if a["id"] == account_id), None)
     if not acc:
         raise HTTPException(status_code=404, detail="Channel not found")
     return acc
@@ -108,7 +112,7 @@ async def _plan(db: AsyncSession, account_id: int) -> Optional[ChannelPlan]:
 @router.post("", response_model=PostResponse)
 async def schedule_post(req: SchedulePostRequest, db: AsyncSession = Depends(get_db)):
     item = await _content(req.content_item_id)
-    acc = await _account(req.connected_account_id)
+    acc = await _account(db, req.connected_account_id)
     post = _new_post(item, acc, req.scheduled_at)
     db.add(post)
     await db.commit()
@@ -198,14 +202,14 @@ async def suggest_publication_slots(segment_id: int, days: int = 3, per_day: int
 @router.get("/plans/{account_id}")
 async def get_posting_plan(account_id: int, db: AsyncSession = Depends(get_db)):
     """Розклад публікацій каналу (власний або автоматичний за кривою сегмента)."""
-    await _account(account_id)
+    await _account(db, account_id)
     plan = await _plan(db, account_id)
     return normalize_schedule(plan.schedule if plan else None)
 
 
 @router.put("/plans/{account_id}")
 async def save_posting_plan(account_id: int, plan: PostingSchedule, db: AsyncSession = Depends(get_db)):
-    await _account(account_id)
+    await _account(db, account_id)
     if plan.mode == "auto" and plan.segment_id:
         await _segment(plan.segment_id)
     row = await _plan(db, account_id)
@@ -259,7 +263,7 @@ async def queue_by_plan(req: QueuePostRequest, db: AsyncSession = Depends(get_db
     Ставить матеріал у чергу на найближчий вільний слот розкладу каналу.
     У режимі auto слоти — піки кривої активності сегмента з розкладу.
     """
-    acc = await _account(req.connected_account_id)
+    acc = await _account(db, req.connected_account_id)
     item = await _content(req.content_item_id)
     return await _enqueue_by_plan(db, item, acc)
 
@@ -288,7 +292,7 @@ async def enqueue_from_content(req: EnqueueRequest, db: AsyncSession = Depends(g
     """Постановка матеріалу в чергу з Content (студія «Опублікувати», автопланування)."""
     item = req.content_item
     acc = next(
-        (a for a in await _accounts() if a["platform_code"] == item["platform_code"] and a["status"] == "active"),
+        (a for a in await _accounts(db) if a["platform_code"] == item["platform_code"] and a["status"] == "active"),
         None,
     )
     if not acc:

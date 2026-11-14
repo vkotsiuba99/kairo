@@ -33,7 +33,7 @@ def _client(service: str) -> httpx.AsyncClient:
     key = (service, id(asyncio.get_running_loop()))
     if key not in _clients:
         base = getattr(settings, f"{service.upper()}_URL")
-        timeout = httpx.Timeout(settings.SERVICE_TIMEOUT_SECONDS, connect=5.0)
+        timeout = httpx.Timeout(settings.SERVICE_TIMEOUT_SECONDS, connect=2.0)  # у мережі кластера з'єднання — мілісекунди; мертвий сервіс не тримає запит
         if base:
             _clients[key] = httpx.AsyncClient(
                 base_url=base, timeout=timeout,
