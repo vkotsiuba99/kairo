@@ -144,6 +144,7 @@ async def init_db():
         return  # сервіс без власної БД (Media)
 
     async with engine.begin() as conn:
+        await _schema_lock(conn)
         if "audience_segments" in tables:
             try:
                 from sqlalchemy import text
@@ -185,7 +186,20 @@ async def init_db():
         await _seed(session, tables)
 
 
+async def _schema_lock(conn) -> None:
+    """
+    Репліки й процеси uvicorn стартують одночасно: без блокування вони паралельно
+    створювали ті самі таблиці й падали на «relation already exists». Блокування
+    транзакційне — знімається разом із commit.
+    """
+    if conn.dialect.name == "postgresql":
+        from sqlalchemy import text
+
+        await conn.execute(text("SELECT pg_advisory_xact_lock(724501)"))
+
+
 async def _seed(session: AsyncSession, tables) -> None:
+    await _schema_lock(await session.connection())  # засів теж по черзі: інакше дублікати довідників
     if "platforms" in tables:
         # Довідник платформ: незмінний, однаковий у Content і Publishing
         for plat_data in DEFAULT_PLATFORMS:

@@ -48,3 +48,7 @@ backend/data/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Маркери скрипта навантажувального прогону
+_done.txt
+_abort.txt

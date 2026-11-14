@@ -177,7 +177,7 @@ down and starts it again, logging every event.
 duplicate posts, publish lag); `scripts/load_model.py` extrapolates measured runs with operational laws
 (response time law R = N/X − Z, utilization law U = X·D).
 
-Results on one 16-core machine (3 API replicas × 2 uvicorn workers, 2 publishers, 300 s per run):
+Version 1 (modular monolith, shared database; tag `v1.0`) on one 16-core machine (3 API replicas × 2 uvicorn workers, 2 publishers, 300 s per run):
 
 | Users | RPS | Mean response | p95 read | p95 generate | Errors | Published / lost / duplicate |
 |---|---|---|---|---|---|---|

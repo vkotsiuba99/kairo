@@ -1,60 +1,60 @@
 {
   "users": 50,
   "duration_s": 300,
-  "t0_epoch": 1794658890.656,
-  "requests": 2322,
-  "rps": 6.9,
+  "t0_epoch": 1794659524.769,
+  "requests": 3835,
+  "rps": 12.1,
   "operations": {
     "dashboard": {
-      "count": 375,
-      "rps": 1.12,
-      "p50_ms": 211.9,
-      "p95_ms": 9530.1,
-      "p99_ms": 25379.4,
-      "error_rate": 0.0453
+      "count": 593,
+      "rps": 1.87,
+      "p50_ms": 209.4,
+      "p95_ms": 1075.9,
+      "p99_ms": 11031.8,
+      "error_rate": 0.0152
     },
     "generate": {
-      "count": 384,
-      "rps": 1.15,
-      "p50_ms": 3249.1,
-      "p95_ms": 51917.4,
-      "p99_ms": 57485.1,
-      "error_rate": 0.1823
+      "count": 623,
+      "rps": 1.96,
+      "p50_ms": 9661.7,
+      "p95_ms": 44911.8,
+      "p99_ms": 55694.3,
+      "error_rate": 0.0578
     },
     "list_content": {
-      "count": 766,
-      "rps": 2.29,
-      "p50_ms": 59.2,
-      "p95_ms": 4544.5,
-      "p99_ms": 51651.9,
-      "error_rate": 0.0209
+      "count": 1276,
+      "rps": 4.02,
+      "p50_ms": 64.6,
+      "p95_ms": 400.6,
+      "p99_ms": 21880.3,
+      "error_rate": 0.0
     },
     "list_queue": {
-      "count": 263,
-      "rps": 0.79,
-      "p50_ms": 30.6,
-      "p95_ms": 2238.6,
-      "p99_ms": 24880.9,
-      "error_rate": 0.019
+      "count": 417,
+      "rps": 1.31,
+      "p50_ms": 32.9,
+      "p95_ms": 81.1,
+      "p99_ms": 128.9,
+      "error_rate": 0.0
     },
     "schedule": {
-      "count": 220,
-      "rps": 0.66,
-      "p50_ms": 161.0,
-      "p95_ms": 6872.6,
-      "p99_ms": 20082.2,
-      "error_rate": 0.0409
+      "count": 391,
+      "rps": 1.23,
+      "p50_ms": 185.0,
+      "p95_ms": 1415.7,
+      "p99_ms": 19581.1,
+      "error_rate": 0.0077
     },
     "telemetry": {
-      "count": 314,
-      "rps": 0.94,
-      "p50_ms": 79.6,
-      "p95_ms": 8224.1,
-      "p99_ms": 25388.7,
-      "error_rate": 0.0223
+      "count": 535,
+      "rps": 1.69,
+      "p50_ms": 97.0,
+      "p95_ms": 1251.4,
+      "p99_ms": 9466.8,
+      "error_rate": 0.0
     }
   },
-  "p95_ms": 24880.9,
-  "error_rate": 0.0534,
-  "published_during_test": 208
+  "p95_ms": 17694.3,
+  "error_rate": 0.0125,
+  "published_during_test": 361
 }

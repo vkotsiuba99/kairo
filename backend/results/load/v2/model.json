@@ -1,0 +1,50 @@
+{
+  "measured": [
+    {
+      "users": 50,
+      "rps": 12.8,
+      "mean_response_s": 2.91,
+      "cpu_cores": 12.13,
+      "cpu_by_service": {
+        "gateway": 0.03,
+        "media": 6.79,
+        "publishing": 0.3,
+        "content": 1.86,
+        "scheduler": 0.48,
+        "telemetry": 0.49,
+        "trends": 0.03,
+        "publishing-metrics": 0.13,
+        "mock-social": 0.08,
+        "rabbitmq": 1.61,
+        "postgres": 0.33
+      },
+      "cpu_core_s_per_request": 0.949
+    }
+  ],
+  "model": [
+    {
+      "users": 100,
+      "rps": 12.8,
+      "mean_response_s": 6.8,
+      "p95_read_ms": 1535,
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 3.7
+    },
+    {
+      "users": 200,
+      "rps": 12.8,
+      "mean_response_s": 14.6,
+      "p95_read_ms": 3294,
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 9.2
+    },
+    {
+      "users": 400,
+      "rps": 12.8,
+      "mean_response_s": 30.3,
+      "p95_read_ms": 6813,
+      "p95_generate_ms": ">60 s (timeout)",
+      "error_pct": 12.9
+    }
+  ]
+}
