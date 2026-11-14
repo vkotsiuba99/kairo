@@ -164,3 +164,26 @@ async def test_event_waits_in_outbox_while_broker_is_unreachable():
     async with AsyncSessionLocal() as db:  # прибрати за собою: інші тести перевіряють порожній outbox
         await db.execute(update(OutboxEvent).where(OutboxEvent.sent_at.is_(None)).values(sent_at=func.now()))
         await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_fails_fast_after_connection_error(monkeypatch):
+    """Після невдалого з'єднання виклики до сервісу кілька секунд не йдуть у мережу."""
+    import httpx
+
+    from app.core import clients
+
+    attempts = {"n": 0}
+
+    class Dead:
+        async def request(self, *args, **kwargs):
+            attempts["n"] += 1
+            raise httpx.ConnectError("name resolution failed")
+
+    monkeypatch.setattr(clients, "_client", lambda service: Dead())
+    monkeypatch.setattr(clients, "_open_until", {})
+    for _ in range(5):
+        with pytest.raises(clients.ServiceError) as err:
+            await clients.call("publishing", "GET", "/accounts")
+        assert err.value.status_code == 503
+    assert attempts["n"] == 1  # лише перша спроба йшла в мережу
