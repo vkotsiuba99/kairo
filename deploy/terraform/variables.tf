@@ -27,3 +27,21 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+variable "mq_instance_type" {
+  description = "Тип інстансу Amazon MQ (RabbitMQ)"
+  type        = string
+  default     = "mq.t3.micro"
+}
+
+variable "mq_cluster" {
+  description = "Кластер із трьох вузлів у різних зонах замість одного інстансу"
+  type        = bool
+  default     = false
+}
+
+variable "mq_password" {
+  description = "Пароль користувача RabbitMQ (щонайменше 12 символів)"
+  type        = string
+  sensitive   = true
+}

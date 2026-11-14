@@ -1,5 +1,8 @@
+{{- /* Фонові процеси сервісу без HTTP (опитування лічильників мереж) */}}
 {{- $root := . }}
-{{- range $name, $spec := dict "publisher" (dict "script" "scripts/worker_publisher.py" "values" .Values.publisher) "telemetry" (dict "script" "scripts/worker_telemetry.py" "values" .Values.telemetry) }}
+{{- range $name, $w := .Values.workers }}
+{{- $spec := merge (dict) $w (index $root.Values.services $w.service) }}
+{{- $ctx := dict "root" $root "service" $w.service "spec" $spec }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -8,7 +11,7 @@ metadata:
   labels: {{- include "kairo.labels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
 spec:
-  replicas: {{ $spec.values.replicas }}
+  replicas: {{ $w.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ $root.Release.Name }}
@@ -22,7 +25,7 @@ spec:
         - name: {{ $name }}
           image: "{{ $root.Values.image.backend }}:{{ $root.Values.image.tag }}"
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          command: ["python", "{{ $spec.script }}"]
-          {{- include "kairo.backendEnv" $root | nindent 10 }}
-          resources: {{- toYaml $spec.values.resources | nindent 12 }}
+          command: ["python", "{{ $w.script }}"]
+          {{- include "kairo.backendEnv" $ctx | nindent 10 }}
+          resources: {{- toYaml $w.resources | nindent 12 }}
 {{- end }}

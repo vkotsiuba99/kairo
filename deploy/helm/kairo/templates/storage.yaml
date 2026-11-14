@@ -1,0 +1,12 @@
+# Сховище медіа: Media записує ілюстрації й відео, Publishing читає їх для завантаження в мережі
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-media
+  labels: {{- include "kairo.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: {{ .Values.media.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.media.size }}

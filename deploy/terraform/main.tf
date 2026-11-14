@@ -1,7 +1,8 @@
-# Інфраструктура Kairo в AWS: VPC, кластер EKS, PostgreSQL 16 (RDS, з pgvector),
-# реєстри образів ECR. Застосунок установлюється в кластер Helm-чартом ../helm/kairo.
+# Інфраструктура Kairo в AWS: VPC, кластер EKS, PostgreSQL 16 (RDS, з pgvector; окрема
+# база на кожен сервіс створюється Job-ом Helm-чарта), брокер подій RabbitMQ (Amazon MQ),
+# сховище медіа EFS, реєстри образів ECR. Застосунок — Helm-чарт ../helm/kairo.
 #
-#   terraform init && terraform apply -var="db_password=..."
+#   terraform init && terraform apply -var="db_password=..." -var="mq_password=..."
 #
 # Конфігурацію підготовлено для розгортання; у межах роботи навантажувальні
 # експерименти виконано на локальному стенді Docker Compose.
@@ -105,7 +106,7 @@ resource "aws_db_instance" "postgres" {
   instance_class         = var.db_instance_class
   allocated_storage      = 50
   max_allocated_storage  = 200
-  db_name                = "kairo"
+  db_name                = "kairo" # службова; бази сервісів (kairo_content, …) створює чарт
   username               = "kairo"
   password               = var.db_password
   db_subnet_group_name   = aws_db_subnet_group.db.name
@@ -123,4 +124,69 @@ resource "aws_ecr_repository" "repo" {
   image_scanning_configuration {
     scan_on_push = true
   }
+}
+
+# Брокер подій між сервісами (RabbitMQ). Durable-черги й підтвердження публікації
+# разом з outbox у сервісах дають доставку «щонайменше один раз».
+resource "aws_security_group" "mq" {
+  name   = "${local.name}-mq"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    description     = "AMQPS from EKS nodes"
+    from_port       = 5671
+    to_port         = 5671
+    protocol        = "tcp"
+    security_groups = [module.eks.node_security_group_id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_mq_broker" "events" {
+  broker_name         = "${local.name}-events"
+  engine_type         = "RabbitMQ"
+  engine_version      = "3.13"
+  host_instance_type  = var.mq_instance_type
+  deployment_mode     = var.mq_cluster ? "CLUSTER_MULTI_AZ" : "SINGLE_INSTANCE"
+  subnet_ids          = var.mq_cluster ? module.vpc.private_subnets : [module.vpc.private_subnets[0]]
+  security_groups     = [aws_security_group.mq.id]
+  publicly_accessible = false
+  auto_minor_version_upgrade = true
+
+  user {
+    username = "kairo"
+    password = var.mq_password
+  }
+}
+
+# Сховище медіа: Media пише ілюстрації й відео, Publishing читає (ReadWriteMany через EFS CSI)
+resource "aws_efs_file_system" "media" {
+  creation_token = "${local.name}-media"
+  encrypted      = true
+}
+
+resource "aws_security_group" "efs" {
+  name   = "${local.name}-efs"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    description     = "NFS from EKS nodes"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [module.eks.node_security_group_id]
+  }
+}
+
+resource "aws_efs_mount_target" "media" {
+  for_each        = toset(module.vpc.private_subnets)
+  file_system_id  = aws_efs_file_system.media.id
+  subnet_id       = each.value
+  security_groups = [aws_security_group.efs.id]
 }

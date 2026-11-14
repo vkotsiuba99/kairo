@@ -2,32 +2,68 @@
 image:
   backend: 000000000000.dkr.ecr.eu-central-1.amazonaws.com/kairo-backend
   frontend: 000000000000.dkr.ecr.eu-central-1.amazonaws.com/kairo-frontend
-  tag: "1.0.0"
+  tag: "2.0.0"
   pullPolicy: IfNotPresent
 
-api:
-  replicas: 3
-  workers: 2               # процеси uvicorn у поді
-  resources:
-    requests: { cpu: 250m, memory: 384Mi }
-    limits: { cpu: "1", memory: 1Gi }
-  autoscaling:
-    minReplicas: 3
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 70
-  minAvailable: 2          # PodDisruptionBudget: оновлення й відмови вузла не гасять API повністю
+# Шість сервісів з одного образу; database — власна БД сервісу ("" — без БД)
+services:
+  content:          # сегменти, бандит, генерація тексту, експерименти
+    database: kairo_content
+    replicas: 3
+    workers: 2      # процеси uvicorn у поді
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    autoscaling: { minReplicas: 3, maxReplicas: 10, targetCPUUtilizationPercentage: 70 }
+    minAvailable: 2 # PodDisruptionBudget: оновлення й відмови вузла не гасять сервіс повністю
+  scheduler:        # розклади каналів і черга публікацій (атомарне захоплення — репліки безпечні)
+    database: kairo_scheduler
+    replicas: 2
+    workers: 2
+    env: { RUN_SCHEDULER_IN_API: "true" }
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+    minAvailable: 1
+  publishing:       # облікові дані каналів і адаптери мереж
+    database: kairo_publishing
+    replicas: 2
+    workers: 2
+    media: readOnly
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+    minAvailable: 1
+  telemetry:        # реакції, винагорода, дашборд, журнал подій
+    database: kairo_telemetry
+    replicas: 2
+    workers: 2
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+  media:            # ілюстрації, відео, озвучення — найважча частина, масштабується окремо
+    database: ""
+    replicas: 2
+    workers: 2
+    media: readWrite
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: "2", memory: 2Gi }
+    autoscaling: { minReplicas: 2, maxReplicas: 8, targetCPUUtilizationPercentage: 70 }
+  trends:           # збирачі згадок і каталог тем
+    database: kairo_trends
+    replicas: 1
+    workers: 1
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
 
-publisher:
-  replicas: 2              # атомарне захоплення дописів — дублікатів не буде
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
+# Фонові процеси поза HTTP: опитування лічильників мереж (один екземпляр)
+workers:
+  publishing-metrics:
+    service: publishing
+    script: scripts/worker_metrics.py
+    replicas: 1
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
 
-telemetry:
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-
-frontend:
+gateway:            # вебінтерфейс + API-шлюз (nginx)
   replicas: 2
 
 ingress:
@@ -37,12 +73,15 @@ ingress:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
 
-database:
+database:                   # один сервер RDS, окрема БД на сервіс (створює Job db-init)
   host: kairo-pg.xxxxxxxx.eu-central-1.rds.amazonaws.com   # outputs.database_host
   port: "5432"
-  name: kairo
   user: kairo
   password: ""             # передається з CI: --set database.password=...
+
+media:                      # сховище файлів, спільне для Media (запис) і Publishing (читання)
+  storageClass: efs-sc      # ReadWriteMany (Amazon EFS, outputs.media_file_system_id)
+  size: 20Gi
 
 config:
   LLM_BASE_URL: http://lm-studio.internal:1234/v1
@@ -54,3 +93,4 @@ config:
 secrets:
   ENCRYPTION_KEY: ""
   OPENROUTER_API_KEY: ""
+  RABBITMQ_URL: ""          # amqps://user:pass@<broker>.mq.eu-central-1.amazonaws.com:5671 (outputs.rabbitmq_endpoint)

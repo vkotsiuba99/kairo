@@ -13,7 +13,9 @@ RUN npm run build
 FROM nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Шаблон конфігурації: entrypoint nginx підставляє KAIRO_* під час старту
+COPY default.conf.template /etc/nginx/templates/default.conf.template
+ENV KAIRO_RESOLVER=127.0.0.11     KAIRO_SVC_SUFFIX=""     NGINX_ENVSUBST_FILTER=KAIRO_
 
 EXPOSE 80
 

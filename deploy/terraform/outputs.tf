@@ -13,3 +13,11 @@ output "database_host" {
 output "ecr_repositories" {
   value = { for name, repo in aws_ecr_repository.repo : name => repo.repository_url }
 }
+
+output "rabbitmq_endpoint" {
+  value = aws_mq_broker.events.instances[0].endpoints[0]
+}
+
+output "media_file_system_id" {
+  value = aws_efs_file_system.media.id
+}

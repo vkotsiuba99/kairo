@@ -6,10 +6,13 @@ metadata:
 data:
   POSTGRES_SERVER: {{ .Values.database.host | quote }}
   POSTGRES_PORT: {{ .Values.database.port | quote }}
-  POSTGRES_DB: {{ .Values.database.name | quote }}
   POSTGRES_USER: {{ .Values.database.user | quote }}
   USE_SQLITE_FALLBACK: "false"
   RUN_SCHEDULER_IN_API: "false"
+  # Адреси сервісів (імена Service у цьому просторі імен)
+  {{- range $name, $_ := .Values.services }}
+  {{ upper $name }}_URL: "http://{{ $name }}:8000"
+  {{- end }}
   {{- range $key, $value := .Values.config }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
@@ -24,3 +27,4 @@ stringData:
   POSTGRES_PASSWORD: {{ required "database.password is required" .Values.database.password | quote }}
   ENCRYPTION_KEY: {{ required "secrets.ENCRYPTION_KEY is required" .Values.secrets.ENCRYPTION_KEY | quote }}
   OPENROUTER_API_KEY: {{ .Values.secrets.OPENROUTER_API_KEY | quote }}
+  RABBITMQ_URL: {{ required "secrets.RABBITMQ_URL is required" .Values.secrets.RABBITMQ_URL | quote }}

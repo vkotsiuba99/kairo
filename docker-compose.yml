@@ -1,102 +1,155 @@
+# Kairo v2 — шість сервісів, у кожного своя база; події між ними — через RabbitMQ.
+#
+#   gateway (nginx) ─► content │ scheduler │ publishing │ telemetry │ media │ trends
+#                            PostgreSQL: окрема БД на сервіс       RabbitMQ: події
+#
+# Усі сервіси — один образ бекенду; змінна SERVICE визначає, що піднімає процес.
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  image: kairo-backend:2.0
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+x-env: &env
+  POSTGRES_SERVER: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-kairo}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairo_secret}
+  USE_SQLITE_FALLBACK: "false"
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-kairo}:${RABBITMQ_PASSWORD:-kairo_secret}@rabbitmq:5672/
+  CONTENT_URL: http://content:8000
+  SCHEDULER_URL: http://scheduler:8000
+  PUBLISHING_URL: http://publishing:8000
+  TELEMETRY_URL: http://telemetry:8000
+  MEDIA_URL: http://media:8000
+  TRENDS_URL: http://trends:8000
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
+x-api: &api-command ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
 services:
-  # Database with pgvector extension (вона ж — черга публікацій, таблиця posts)
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
-    command: ["postgres", "-c", "max_connections=300"]
+    command: ["postgres", "-c", "max_connections=600"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-kairo}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairo_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-kairo}
+      POSTGRES_DB: kairo
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kairo}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # FastAPI REST and WebSocket Gateway. Без container_name — масштабується
-  # (docker compose up --scale api=3), nginx розподіляє запити між репліками.
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
     restart: unless-stopped
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
-    env_file:
-      - path: .env
-        required: false
-    environment: &backend-env
-      POSTGRES_SERVER: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-kairo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairo_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-kairo}
-      USE_SQLITE_FALLBACK: "false"
-      RUN_SCHEDULER_IN_API: "false"       # публікує окремий сервіс publisher
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-kairo}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-kairo_secret}
+    ports:
+      - "15672:15672"   # консоль керування
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # Сегменти аудиторії, бандит, генерація тексту, експерименти
+  content:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: content
+      POSTGRES_DB: kairo_content
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
       LLM_MODEL_NAME: ${LLM_MODEL_NAME:-ternary-bonsai-27b}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      TTS_SERVICE_URL: http://worker-tts:8001
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
+  # Розклади каналів і черга публікацій; диспетчер черги працює в кожній репліці
+  scheduler:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: scheduler
+      POSTGRES_DB: kairo_scheduler
+      RUN_SCHEDULER_IN_API: "true"
+
+  # Облікові дані каналів і адаптери семи мереж
+  publishing:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: publishing
+      POSTGRES_DB: kairo_publishing
+    volumes:
+      - shared_media:/app/data/media:ro
+      - shared_archive:/app/data/archive
+
+  # Опитування лічильників опублікованих дописів (один екземпляр)
+  publishing-metrics:
+    <<: *backend
+    command: ["python", "scripts/worker_metrics.py"]
+    environment:
+      <<: *env
+      SERVICE: publishing
+      POSTGRES_DB: kairo_publishing
+
+  # Реакції аудиторії, винагорода, дашборд і журнал подій
+  telemetry:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: telemetry
+      POSTGRES_DB: kairo_telemetry
+
+  # Ілюстрації, відео, озвучення (власної БД немає — лише сховище файлів)
+  media:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: media
+      TTS_SERVICE_URL: http://localhost:8000/api/v1/media
     volumes:
       - shared_media:/app/data/media
-      - shared_archive:/app/data/archive
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
-  # Публікатор: забирає з черги дописи, час яких настав (атомарне захоплення —
-  # кілька реплік не публікують той самий допис двічі).
-  publisher:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    command: ["python", "scripts/worker_publisher.py"]
-    env_file:
-      - path: .env
-        required: false
-    environment: *backend-env
-    volumes:
-      - shared_media:/app/data/media
-      - shared_archive:/app/data/archive
-    depends_on:
-      postgres:
-        condition: service_healthy
+  # Тренди: збирачі згадок і каталог тем
+  trends:
+    <<: *backend
+    command: *api-command
+    environment:
+      <<: *env
+      SERVICE: trends
+      POSTGRES_DB: kairo_trends
 
-  # Збір телеметрії з усіх каналів і перерахунок винагороди політики
-  worker-telemetry:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    command: ["python", "scripts/worker_telemetry.py"]
-    env_file:
-      - path: .env
-        required: false
-    environment: *backend-env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # TTS Service (CPU-only speech synthesis for YouTube video composition)
-  worker-tts:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    command: ["python", "scripts/worker_tts.py"]
-
-  frontend:
+  # Вебінтерфейс і API-шлюз: розводить /api/v1/* по сервісах, /media — у Media
+  gateway:
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -106,9 +159,15 @@ services:
     volumes:
       - ./frontend/dist:/usr/share/nginx/html:ro
     depends_on:
-      - api
+      - content
+      - scheduler
+      - publishing
+      - telemetry
+      - media
+      - trends
 
 volumes:
   postgres_data:
+  rabbitmq_data:
   shared_media:
   shared_archive:
