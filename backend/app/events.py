@@ -98,10 +98,20 @@ class RabbitBus:
         self.url, self.consumers = url, consumers
         self.connection = self.channel = self.exchange = None
 
-    async def start(self) -> None:
+    async def start(self, attempts: int = 30) -> None:
         import aio_pika
 
-        self.connection = await aio_pika.connect_robust(self.url)
+        # брокер може стартувати повільніше за сервіс: перше з'єднання — з повторами,
+        # далі connect_robust відновлює його сам
+        for attempt in range(1, attempts + 1):
+            try:
+                self.connection = await aio_pika.connect_robust(self.url)
+                break
+            except Exception as e:
+                if attempt == attempts:
+                    raise
+                logger.info("RabbitMQ is not ready (%s), retry %d/%d", e, attempt, attempts)
+                await asyncio.sleep(2)
         self.channel = await self.connection.channel(publisher_confirms=True)
         await self.channel.set_qos(prefetch_count=16)
         self.exchange = await self.channel.declare_exchange(
