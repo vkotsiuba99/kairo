@@ -88,6 +88,17 @@ class Post(Base):
     claimed_at = Column(DateTime(timezone=True), nullable=True)  # коли воркер захопив допис
 
 
+class KnownChannel(Base):
+    """Канали, відомі сервісу Scheduler з Publishing: постановка в чергу працює й без нього."""
+    __tablename__ = "known_channels"
+
+    account_id = Column(Integer, primary_key=True)
+    platform_code = Column(String(64), nullable=False)
+    label = Column(String(256), nullable=True)
+    status = Column(String(32), nullable=False, default="active")
+    updated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class ChannelPlan(Base):
     """Розклад публікацій каналу (сервіс Scheduler).
 

@@ -13,13 +13,14 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audience.profiles import peak_hours, suggest_slots, timezone_offset
 from app.core.activity import iso
 from app.core.clients import ServiceError, call
 from app.core.database import get_db
-from app.models.entities import ChannelPlan, Post
+from app.models.entities import ChannelPlan, KnownChannel, Post
 from app.scheduler.planner import describe_slot, next_free_slot, normalize_schedule
 from app.scheduler.runner import publish_post
 from app.schemas.api import PostingSchedule, PostResponse, QueuePostRequest, SchedulePostRequest
@@ -37,23 +38,39 @@ async def _content(item_id: int) -> Dict[str, Any]:
         raise
 
 
+_saved_channels: tuple = ()  # що цей процес уже записав у known_channels
+
+
 async def _accounts(db: AsyncSession) -> List[Dict[str, Any]]:
     """
-    Канали з Publishing. Якщо він лежить, черга приймає дописи за каналами, уже відомими з
-    її власної таблиці (вона спільна для всіх реплік): публікацію виконає Publishing, коли повернеться.
+    Канали з Publishing. Список зберігається у власній БД Scheduler (спільній для всіх реплік):
+    якщо Publishing лежить, черга приймає дописи за ним, а публікацію виконає Publishing,
+    коли повернеться.
     """
+    global _saved_channels
     try:
-        return await call("publishing", "GET", "/accounts")
+        accounts = await call("publishing", "GET", "/accounts")
     except ServiceError as e:
         if e.status_code < 500:
             raise
-        known = (
-            await db.execute(select(Post.connected_account_id, Post.platform_code, Post.account_label).distinct())
-        ).all()
+        known = (await db.execute(select(KnownChannel))).scalars().all()
         if not known:
             raise
-        return [{"id": a, "platform_code": code, "external_account_id": label, "status": "active"}
-                for a, code, label in known]
+        return [{"id": k.account_id, "platform_code": k.platform_code, "external_account_id": k.label,
+                 "status": k.status} for k in known]
+
+    snapshot = tuple(sorted((a["id"], a["platform_code"], a.get("external_account_id"), a["status"])
+                            for a in accounts))
+    if snapshot != _saved_channels:  # пишемо лише коли список змінився, а не на кожен запит
+        try:
+            for account_id, code, label, status in snapshot:
+                await db.merge(KnownChannel(account_id=account_id, platform_code=code, label=label, status=status,
+                                            updated_at=datetime.now(timezone.utc)))
+            await db.commit()
+            _saved_channels = snapshot
+        except IntegrityError:  # інша репліка записала ті самі канали одночасно
+            await db.rollback()
+    return accounts
 
 
 async def _account(db: AsyncSession, account_id: int) -> Dict[str, Any]:

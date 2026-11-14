@@ -16,7 +16,7 @@ SERVICE_TABLES: Dict[str, List[str]] = {
         "policy_arms", "policy_decisions", "policy_rewards",
         "experiments", "simulation_runs", "metrics_snapshots",
     ],
-    "scheduler": ["posts", "channel_plans"],
+    "scheduler": ["posts", "channel_plans", "known_channels"],
     "publishing": ["platforms", "connected_accounts", "publications"],
     "telemetry": ["tracked_posts", "telemetry_events"],
     "media": [],

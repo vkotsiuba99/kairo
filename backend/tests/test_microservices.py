@@ -8,7 +8,7 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app import events
 from app.core.database import AsyncSessionLocal
@@ -123,23 +123,44 @@ async def test_media_limits_concurrent_generations(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scheduler_queues_with_last_known_channels_when_publishing_is_down(monkeypatch):
-    """Відмова Publishing не зупиняє постановку в чергу: канали, відомі з черги, приймаються далі."""
-    from datetime import datetime, timezone
-
+    """Відмова Publishing не зупиняє постановку в чергу: список каналів збережено в БД Scheduler."""
     from app.api.v1 import schedule
     from app.core.clients import ServiceError
     from app.core.init_db import init_db
-    from app.models.entities import Post
 
     await init_db()
+    accounts = [{"id": 4242, "platform_code": "telegram", "external_account_id": "@chan", "status": "active"}]
+
+    async def up(*args, **kwargs):
+        return accounts
 
     async def down(*args, **kwargs):
         raise ServiceError("publishing", 503, "The publishing service is unavailable")
 
+    async with AsyncSessionLocal() as db:
+        monkeypatch.setattr(schedule, "call", up)
+        assert await schedule._account(db, 4242) == accounts[0]
+    monkeypatch.setattr(schedule, "_saved_channels", ())  # інша репліка: у пам'яті нічого немає
     monkeypatch.setattr(schedule, "call", down)
     async with AsyncSessionLocal() as db:
-        db.add(Post(content_item_id=1, connected_account_id=4242, platform_code="telegram",
-                    account_label="@chan", scheduled_at=datetime.now(timezone.utc), status="published"))
-        await db.commit()
-        acc = await schedule._account(db, 4242)  # сервіс лежить — канал відомий з власної черги
+        acc = await schedule._account(db, 4242)  # сервіс лежить — канал відомий з власної БД
     assert (acc["platform_code"], acc["external_account_id"]) == ("telegram", "@chan")
+
+
+@pytest.mark.asyncio
+async def test_event_waits_in_outbox_while_broker_is_unreachable():
+    """Поки брокера немає, подія лишається в outbox і буде відправлена пізніше."""
+    from app.core.init_db import init_db
+
+    await init_db()
+    async with AsyncSessionLocal() as db:
+        events.emit(db, "post.metrics", {"post_id": 1})
+        await db.commit()
+    bus = events.RabbitBus("amqp://unreachable", set())  # з'єднання ще не встановлено
+    assert await events.relay_once(bus) == 0
+    async with AsyncSessionLocal() as db:
+        unsent = (await db.execute(select(func.count(OutboxEvent.id)).where(OutboxEvent.sent_at.is_(None)))).scalar()
+    assert unsent >= 1
+    async with AsyncSessionLocal() as db:  # прибрати за собою: інші тести перевіряють порожній outbox
+        await db.execute(update(OutboxEvent).where(OutboxEvent.sent_at.is_(None)).values(sent_at=func.now()))
+        await db.commit()

@@ -1,0 +1,10 @@
+{
+  "outbox_unsent": 0,
+  "posts_published": "243",
+  "posts_failed": "0",
+  "published_items_scheduler": "243",
+  "published_items_content": "243",
+  "tracked_posts_telemetry": "243",
+  "publications_publishing": "243",
+  "rabbitmq_queues": "name\tmessages; kairo.content\t2; kairo.telemetry\t2"
+}

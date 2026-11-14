@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.DATA_MEDIA_PATH, exist_ok=True)
 
     bus = events.make_bus(set(services))
-    await bus.start()
+    connecting = asyncio.create_task(bus.start())  # брокер не блокує старт сервісу
     stop = asyncio.Event()
     tasks = []
     if services != ["media"]:  # у Media немає БД, отже й outbox
@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI):
     stop.set()
     for task in tasks:
         await task
+    connecting.cancel()
     if scheduler:
         scheduler.shutdown()
     await bus.close()

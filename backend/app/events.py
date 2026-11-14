@@ -98,20 +98,22 @@ class RabbitBus:
         self.url, self.consumers = url, consumers
         self.connection = self.channel = self.exchange = None
 
-    async def start(self, attempts: int = 30) -> None:
+    async def start(self) -> None:
         import aio_pika
 
-        # брокер може стартувати повільніше за сервіс: перше з'єднання — з повторами,
-        # далі connect_robust відновлює його сам
-        for attempt in range(1, attempts + 1):
+        # Брокер не є умовою старту: сервіс уже обслуговує запити, а перше з'єднання
+        # встановлюється у фоні з повторами (далі connect_robust відновлює його сам).
+        # Поки брокера немає, події чекають в outbox.
+        delay = 1.0
+        while True:
             try:
-                self.connection = await aio_pika.connect_robust(self.url)
+                connection = await aio_pika.connect_robust(self.url)
                 break
             except Exception as e:
-                if attempt == attempts:
-                    raise
-                logger.info("RabbitMQ is not ready (%s), retry %d/%d", e, attempt, attempts)
-                await asyncio.sleep(2)
+                logger.info("RabbitMQ is not reachable (%s), retry in %.0f s", e, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 10.0)
+        self.connection = connection
         self.channel = await self.connection.channel(publisher_confirms=True)
         await self.channel.set_qos(prefetch_count=16)
         self.exchange = await self.channel.declare_exchange(
@@ -141,6 +143,8 @@ class RabbitBus:
     async def publish(self, event: Dict[str, Any]) -> None:
         import aio_pika
 
+        if self.exchange is None:
+            raise RuntimeError("RabbitMQ is not connected yet")
         await self.exchange.publish(
             aio_pika.Message(
                 json.dumps(event, default=str).encode(),
