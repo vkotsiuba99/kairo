@@ -187,3 +187,29 @@ async def test_circuit_breaker_fails_fast_after_connection_error(monkeypatch):
             await clients.call("publishing", "GET", "/accounts")
         assert err.value.status_code == 503
     assert attempts["n"] == 1  # лише перша спроба йшла в мережу
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_sends_single_probe_after_pause(monkeypatch):
+    """Після паузи до мертвого сервісу йде одна пробна спроба, а не всі накопичені виклики."""
+    import asyncio
+
+    import httpx
+
+    from app.core import clients
+
+    attempts = {"n": 0}
+
+    class Slow:
+        async def request(self, *args, **kwargs):
+            attempts["n"] += 1
+            await asyncio.sleep(0.05)
+            raise httpx.ConnectTimeout("dns is slow")
+
+    monkeypatch.setattr(clients, "_client", lambda service: Slow())
+    monkeypatch.setattr(clients, "_open_until", {"publishing": 0.0})  # пауза вже минула
+    monkeypatch.setattr(clients, "_probing", set())
+    results = await asyncio.gather(*(clients.call("publishing", "GET", "/accounts") for _ in range(10)),
+                                   return_exceptions=True)
+    assert all(isinstance(r, clients.ServiceError) and r.status_code == 503 for r in results)
+    assert attempts["n"] == 1  # мережу торкнулася лише пробна спроба

@@ -100,6 +100,8 @@ app.add_middleware(
 @app.exception_handler(ServiceError)
 async def service_error_handler(request: Request, exc: ServiceError):
     # помилка іншого сервісу доходить до клієнта з тим самим статусом
+    logger.warning("%s %s: %s answered %s: %s", request.method, request.url.path,
+                   exc.service, exc.status_code, str(exc.detail)[:200])
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 

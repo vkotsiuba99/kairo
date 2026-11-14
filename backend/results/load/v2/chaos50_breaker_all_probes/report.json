@@ -1,0 +1,91 @@
+[
+  {
+    "run": "chaos50",
+    "users": 50,
+    "requests": 4955,
+    "rps": 16.5,
+    "p95_read_ms": 615.6,
+    "p95_generate_ms": 32430.6,
+    "p95_all_ms": 8696.2,
+    "error_pct": 21.92,
+    "posts_total": 172,
+    "posts_by_status": {
+      "published": 172
+    },
+    "published": 172,
+    "lost": 0,
+    "retried": 3,
+    "lag_p50_s": 1.5,
+    "lag_p95_s": 67.7,
+    "lag_max_s": 74.2,
+    "mock_published": 174,
+    "duplicates": 2,
+    "baseline_error_pct": 3.01,
+    "chaos": {
+      "content": {
+        "kills": 1,
+        "error_pct_in_window": 56.36,
+        "impact_max_s": 67.0,
+        "publish_lag_max_s": 2.5,
+        "error_pct_by_op": {
+          "dashboard": 0.0,
+          "generate": 99.4,
+          "list_content": 100.0,
+          "list_queue": 0.0,
+          "schedule": 98.5,
+          "telemetry": 0.0
+        },
+        "published_during_outage": 75,
+        "published_60s_after": 37
+      },
+      "publishing": {
+        "kills": 1,
+        "error_pct_in_window": 5.36,
+        "impact_max_s": 83.8,
+        "publish_lag_max_s": 0.0,
+        "error_pct_by_op": {
+          "dashboard": 0.0,
+          "generate": 9.6,
+          "list_content": 0.0,
+          "list_queue": 0.0,
+          "schedule": 35.8,
+          "telemetry": 0.0
+        },
+        "published_during_outage": 1,
+        "published_60s_after": 75
+      },
+      "rabbitmq": {
+        "kills": 1,
+        "error_pct_in_window": 17.99,
+        "impact_max_s": 59.4,
+        "publish_lag_max_s": 1.5,
+        "error_pct_by_op": {
+          "dashboard": 0.9,
+          "generate": 33.2,
+          "list_content": 31.8,
+          "list_queue": 1.9,
+          "schedule": 25.6,
+          "telemetry": 1.8
+        },
+        "published_during_outage": 23,
+        "published_60s_after": 20
+      },
+      "scheduler": {
+        "kills": 1,
+        "error_pct_in_window": 21.83,
+        "impact_max_s": 50.1,
+        "publish_lag_max_s": 72.2,
+        "error_pct_by_op": {
+          "dashboard": 0.0,
+          "generate": 0.0,
+          "list_content": 0.0,
+          "list_queue": 97.7,
+          "schedule": 100.0,
+          "telemetry": 0.0
+        },
+        "published_during_outage": 1,
+        "published_60s_after": 15
+      }
+    }
+  }
+]

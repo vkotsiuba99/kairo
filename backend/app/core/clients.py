@@ -55,12 +55,17 @@ def _client(service: str) -> httpx.AsyncClient:
 # пошуки DNS його імені займали пул потоків і гальмували виклики до живих сервісів.
 BREAKER_SECONDS = 5.0
 _open_until: Dict[str, float] = {}
+_probing: set = set()
 
 
 async def call(service: str, method: str, path: str, **kwargs) -> Any:
     """Викликає /api/v1{path} іншого сервісу й повертає JSON відповіді."""
-    if time.monotonic() < _open_until.get(service, 0.0):
-        raise ServiceError(service, 503, f"The {service} service is unavailable (circuit open)")
+    if service in _open_until:
+        # Напіввідкритий стан: після паузи до сервісу йде лише одна пробна спроба, решта
+        # одразу отримує 503. Інакше всі накопичені виклики разом ішли б у мережу й DNS.
+        if time.monotonic() < _open_until[service] or service in _probing:
+            raise ServiceError(service, 503, f"The {service} service is unavailable (circuit open)")
+        _probing.add(service)
     try:
         resp = await _client(service).request(method, settings.API_V1_STR + path, **kwargs)
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
@@ -68,6 +73,10 @@ async def call(service: str, method: str, path: str, **kwargs) -> Any:
         raise ServiceError(service, 503, f"The {service} service is unavailable: {e}") from e
     except httpx.HTTPError as e:
         raise ServiceError(service, 503, f"The {service} service is unavailable: {e}") from e
+    else:
+        _open_until.pop(service, None)  # сервіс відповів — вимикач закрито
+    finally:
+        _probing.discard(service)
     if resp.status_code >= 400:
         try:
             detail = resp.json().get("detail", resp.text)
