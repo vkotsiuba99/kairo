@@ -55,6 +55,19 @@ async def lifespan(app: FastAPI):
         from app.scheduler.runner import start_scheduler
 
         scheduler = start_scheduler()
+    if "scheduler" in services:
+        from datetime import datetime, timezone
+
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from app.api.v1.schedule import refresh_known_channels
+
+        # список каналів — одразу на старті й далі кожні 30 с (запасний на час відмови Publishing)
+        scheduler = scheduler or AsyncIOScheduler()
+        scheduler.add_job(refresh_known_channels, "interval", seconds=30, id="refresh_known_channels",
+                          next_run_time=datetime.now(timezone.utc), max_instances=1, coalesce=True)
+        if not scheduler.running:
+            scheduler.start()
 
     yield
 

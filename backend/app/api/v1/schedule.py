@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audience.profiles import peak_hours, suggest_slots, timezone_offset
@@ -68,7 +68,7 @@ async def _accounts(db: AsyncSession) -> List[Dict[str, Any]]:
                                             updated_at=datetime.now(timezone.utc)))
             await db.commit()
             _saved_channels = snapshot
-        except IntegrityError:  # інша репліка записала ті самі канали одночасно
+        except SQLAlchemyError:  # інша репліка пише ті самі канали одночасно — запит від цього не падає
             await db.rollback()
     return accounts
 
@@ -356,3 +356,17 @@ async def queue_activity(limit: int = 200, db: AsyncSession = Depends(get_db)):
         }
         for p in posts
     ]
+
+
+async def refresh_known_channels() -> None:
+    """
+    Фонове оновлення списку каналів (на старті й періодично): без нього Scheduler дізнавався б
+    про канали лише з перших запитів і за ранньої відмови Publishing не мав би запасного списку.
+    """
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        try:
+            await _accounts(db)
+        except (ServiceError, SQLAlchemyError):
+            pass  # спробуємо в наступному циклі
