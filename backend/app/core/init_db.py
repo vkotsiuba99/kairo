@@ -135,13 +135,26 @@ DEFAULT_POLICY_ARMS = [
 
 
 async def init_db():
+    # Кожен сервіс створює у своїй БД лише власні таблиці (app.services)
+    import app.demand.entities  # noqa: F401 — таблиці сервісу Trends у метаданих
+    from app.services import local_tables
+
+    tables = local_tables()
+    if not tables:
+        return  # сервіс без власної БД (Media)
+
     async with engine.begin() as conn:
-        try:
-            from sqlalchemy import text
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-        except Exception as e:
-            logger.info("Extension vector creation skipped: %s", e)
-        await conn.run_sync(Base.metadata.create_all)
+        if "audience_segments" in tables:
+            try:
+                from sqlalchemy import text
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            except Exception as e:
+                logger.info("Extension vector creation skipped: %s", e)
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(
+                sync_conn, tables=[Base.metadata.tables[t] for t in tables]
+            )
+        )
 
         # create_all не змінює вже створені таблиці, тому нові колонки
         # додаються окремо й ідемпотентно — без окремого інструмента міграцій.
@@ -151,11 +164,12 @@ async def init_db():
             ("audience_segments", "profile", "JSON"),
             ("audience_segments", "activity_hours", "JSON"),
             ("audience_segments", "source", "VARCHAR(32) DEFAULT 'manual'"),
-            ("connected_accounts", "posting_schedule", "JSON"),
             ("posts", "attempts", "INTEGER NOT NULL DEFAULT 0"),
             ("posts", "claimed_at", "TIMESTAMP WITH TIME ZONE"),
         ]
         for table, column, coltype in added_columns:
+            if table not in tables:
+                continue
             try:
                 await conn.execute(
                     _text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {coltype}")
@@ -168,7 +182,12 @@ async def init_db():
                     logger.debug("Column %s.%s already present (%s)", table, column, e)
 
     async with AsyncSessionLocal() as session:
-        # Seed platforms if not present
+        await _seed(session, tables)
+
+
+async def _seed(session: AsyncSession, tables) -> None:
+    if "platforms" in tables:
+        # Довідник платформ: незмінний, однаковий у Content і Publishing
         for plat_data in DEFAULT_PLATFORMS:
             res = await session.execute(select(Platform).where(Platform.code == plat_data["code"]))
             existing = res.scalar_one_or_none()
@@ -181,7 +200,7 @@ async def init_db():
                 )
                 session.add(platform)
 
-        # Seed policy arms
+    if "policy_arms" in tables:
         for dim, val in DEFAULT_POLICY_ARMS:
             res = await session.execute(
                 select(PolicyArm).where(PolicyArm.dimension == dim, PolicyArm.value == val)
@@ -191,9 +210,10 @@ async def init_db():
                 arm = PolicyArm(dimension=dim, value=val)
                 session.add(arm)
 
-        await session.flush()
+    await session.flush()
 
-        # Seed / Connect Accounts from environment if configured
+    if "connected_accounts" in tables:
+        # Канали з .env (облікові дані — лише в сервісі Publishing)
         from app.models.entities import ConnectedAccount
         from app.core.security import encrypt_credentials
         from datetime import datetime, timezone
@@ -277,5 +297,5 @@ async def init_db():
                         connected_at=datetime.now(timezone.utc),
                     ))
 
-        await session.commit()
-        logger.info("Database initialized with platforms, policy arms, and connected accounts.")
+    await session.commit()
+    logger.info("Database initialized: %s", ", ".join(sorted(tables)))

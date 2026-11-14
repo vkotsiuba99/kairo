@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import AsyncGenerator
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
@@ -10,16 +10,33 @@ logger = logging.getLogger("kairo.database")
 
 
 def _get_sqlite_url() -> str:
-    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", settings.SQLITE_DB_PATH))
+    # у кожного сервісу своя БД, тож і свій файл, якщо шлях не задано явно
+    rel = settings.SQLITE_DB_PATH or f"data/kairo-{settings.SERVICE}.db"
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", rel))
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     return f"sqlite+aiosqlite:///{db_path}"
+
+
+def _sqlite_engine(url: str):
+    engine = create_async_engine(url, echo=False, connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _pragmas(dbapi_conn, _record):
+        # WAL: читання не блокує запис — у режимі одного процесу сервіси пишуть у
+        # спільний файл, поки інший сервіс читає
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=10000")
+        cur.close()
+
+    return engine
 
 
 def create_engine_instance():
     # If explicitly configured for sqlite or DATABASE_URL provided
     if settings.DATABASE_URL:
         if "sqlite" in settings.DATABASE_URL:
-            return create_async_engine(settings.DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+            return _sqlite_engine(settings.DATABASE_URL)
         return create_async_engine(settings.DATABASE_URL, echo=False, pool_size=10, max_overflow=20)
 
     # If fallback is enabled, test if Postgres server is reachable synchronously or via quick timeout
@@ -39,7 +56,7 @@ def create_engine_instance():
                 settings.POSTGRES_PORT,
                 settings.SQLITE_DB_PATH
             )
-            return create_async_engine(_get_sqlite_url(), echo=False, connect_args={"check_same_thread": False})
+            return _sqlite_engine(_get_sqlite_url())
 
     return create_async_engine(settings.get_database_url(), echo=False, pool_size=10, max_overflow=20)
 

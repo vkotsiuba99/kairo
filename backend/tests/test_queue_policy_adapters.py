@@ -112,16 +112,17 @@ async def test_claim_is_exclusive_between_workers(maker):
     assert len(first) + len(second) == 6
 
 
-class _FailingAdapter:
-    async def publish(self, **kwargs):
-        return PublishResult(success=False, error_message="мережа недоступна")
+async def _publishing_fails(service, method, path, **kwargs):
+    # сервіс Publishing відповів, але мережа не прийняла допис
+    assert (service, path) == ("publishing", "/publishing/internal/publish")
+    return {"success": False, "error_message": "мережа недоступна"}
 
 
 @pytest.mark.asyncio
 async def test_failed_publication_is_retried_then_marked_failed(maker, monkeypatch):
     await _seed_posts(maker, 1)
     monkeypatch.setattr(runner, "AsyncSessionLocal", maker)
-    monkeypatch.setattr(runner, "get_adapter_for_account", lambda account: _FailingAdapter())
+    monkeypatch.setattr(runner, "call", _publishing_fails)
     monkeypatch.setattr(settings, "PUBLISH_MAX_ATTEMPTS", 2)
     monkeypatch.setattr(settings, "PUBLISH_RETRY_BASE_SECONDS", 0)
 
@@ -135,6 +136,25 @@ async def test_failed_publication_is_retried_then_marked_failed(maker, monkeypat
         post = (await db.execute(select(Post))).scalar_one()
         assert (post.status, post.attempts) == ("failed", 2)
         assert post.error_message == "мережа недоступна"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_publishing_service_is_a_failed_attempt(maker, monkeypatch):
+    """Якщо Publishing недоступний, допис не губиться: це звичайна невдала спроба з повтором."""
+    from app.core.clients import ServiceError
+
+    async def down(*args, **kwargs):
+        raise ServiceError("publishing", 503, "The publishing service is unavailable")
+
+    await _seed_posts(maker, 1)
+    monkeypatch.setattr(runner, "AsyncSessionLocal", maker)
+    monkeypatch.setattr(runner, "call", down)
+    monkeypatch.setattr(settings, "PUBLISH_RETRY_BASE_SECONDS", 0)
+    assert await runner.publish_due_posts() == 0
+    async with maker() as db:
+        post = (await db.execute(select(Post))).scalar_one()
+        assert (post.status, post.attempts) == ("pending", 1)
+        assert "unavailable" in post.error_message
 
 
 @pytest.mark.asyncio

@@ -112,7 +112,7 @@ async def test_api_health():
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "healthy"
-        assert data["service"] == "Kairo"
+        assert set(data["services"]) == {"content", "scheduler", "publishing", "telemetry", "media", "trends"}
 
 
 @pytest.mark.asyncio

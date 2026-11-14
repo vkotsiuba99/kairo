@@ -12,8 +12,25 @@ class Settings(BaseSettings):
     )
 
     PROJECT_NAME: str = "Kairo"
-    VERSION: str = "1.0.0"
+    VERSION: str = "2.0.0"
     API_V1_STR: str = "/api/v1"
+
+    # Мікросервіси: процес запускає один сервіс (content, scheduler, publishing,
+    # telemetry, media, trends) зі своєю БД. "all" — усі в одному процесі
+    # (локальна розробка й тести): код той самий, лише розгортання інше.
+    SERVICE: str = "all"
+    # Адреси інших сервісів; порожньо — сервіс у цьому ж процесі
+    CONTENT_URL: str = ""
+    SCHEDULER_URL: str = ""
+    PUBLISHING_URL: str = ""
+    TELEMETRY_URL: str = ""
+    MEDIA_URL: str = ""
+    TRENDS_URL: str = ""
+    SERVICE_TIMEOUT_SECONDS: float = 120.0
+    # Брокер подій (RabbitMQ); порожньо — шина в пам'яті процесу
+    RABBITMQ_URL: str = ""
+    OUTBOX_POLL_SECONDS: float = 1.0
+    OUTBOX_BATCH_SIZE: int = 100
 
     # Security & Encryption for Connected Account credentials (AES-256-GCM)
     # Must be 32 bytes (e.g. 64 hex characters or 44 base64 chars)
@@ -31,12 +48,12 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
 
     # SQLite fallback mode for zero-dependency standalone testing
-    SQLITE_DB_PATH: str = "data/kairo.db"
+    SQLITE_DB_PATH: str = ""  # порожньо — data/kairo-<SERVICE>.db
     USE_SQLITE_FALLBACK: bool = True
 
     # Черга публікацій — таблиця posts: воркер атомарно «захоплює» дописи,
     # тому кілька реплік публікатора не опублікують той самий допис двічі.
-    RUN_SCHEDULER_IN_API: bool = True       # у docker-compose вимкнено: є окремий publisher
+    RUN_SCHEDULER_IN_API: bool = True       # цикл диспетчера черги в сервісі Scheduler
     SCHEDULER_INTERVAL_SECONDS: int = 30
     PUBLISH_BATCH_SIZE: int = 20
     PUBLISH_CONCURRENCY: int = 8
@@ -99,7 +116,7 @@ class Settings(BaseSettings):
     MASTODON_ACCESS_TOKEN: Optional[str] = None
 
     # TTS / Video composition
-    TTS_SERVICE_URL: str = "http://localhost:8001"
+    TTS_SERVICE_URL: str = "http://localhost:8000/api/v1/media"  # озвучення — у сервісі Media
     FFMPEG_BINARY: str = "ffmpeg"
 
     # Storage paths

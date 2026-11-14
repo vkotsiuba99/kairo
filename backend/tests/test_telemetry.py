@@ -19,14 +19,8 @@ from app.adapters.mastodon import MastodonAdapter  # noqa: E402
 from app.adapters.telegram import TelegramAdapter  # noqa: E402
 from app.adapters.youtube import YouTubeAdapter  # noqa: E402
 from app.core.database import AsyncSessionLocal, Base, engine  # noqa: E402
-from app.models.entities import (  # noqa: E402
-    ConnectedAccount,
-    ContentItem,
-    Platform,
-    Post,
-    TelemetryEvent,
-)
-from app.telemetry.collector import _apply_counters, _recorded_totals  # noqa: E402
+from app.models.entities import TelemetryEvent, TrackedPost  # noqa: E402
+from app.telemetry.service import apply_counters, recorded_totals, reward_weights  # noqa: E402
 
 
 @pytest_asyncio.fixture
@@ -69,70 +63,37 @@ async def test_counters_are_converted_to_increments(db_session):
     Повторний опит із тим самим значенням не має додавати телеметрію — інакше
     кожен цикл воркера подвоював би винагороду.
     """
-    platform = Platform(
-        code=f"test_{datetime.now().timestamp()}",
-        display_name="Тестова мережа",
-        adapter_class="app.adapters.local_archive.LocalArchiveAdapter",
-        config_schema={},
-    )
-    db_session.add(platform)
-    await db_session.flush()
-
-    account = ConnectedAccount(
-        platform_id=platform.id,
-        external_account_id="test_account",
-        credentials_encrypted="",
-        status="active",
-        connected_at=datetime.now(timezone.utc),
-    )
-    item = ContentItem(
-        platform_id=platform.id,
-        format="text",
-        tone="analytical",
-        length_bucket="medium",
-        body="тестовий матеріал",
-        status="published",
-    )
-    db_session.add_all([account, item])
-    await db_session.flush()
-
-    post = Post(
-        content_item_id=item.id,
-        connected_account_id=account.id,
-        scheduled_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        published_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        external_post_id="ext-1",
-        status="published",
-    )
+    # допис відомий сервісу Telemetry з події post.published
+    post = TrackedPost(post_id=1, content_item_id=10, platform_code="mastodon", external_post_id="ext-1")
     db_session.add(post)
     await db_session.flush()
 
-    written = await _apply_counters(
-        db_session, post, platform.id, {"reactions": 5, "comments": 2}, "test"
+    written = await apply_counters(
+        db_session, post, {"reactions": 5, "comments": 2}, "test"
     )
     await db_session.flush()
     assert written == 2
 
-    totals = await _recorded_totals(db_session, post.id)
+    totals = await recorded_totals(db_session, post.post_id)
     assert totals["reaction"] == 5
     assert totals["comment"] == 2
 
     # Той самий стан лічильників — нових подій бути не повинно
-    written_again = await _apply_counters(
-        db_session, post, platform.id, {"reactions": 5, "comments": 2}, "test"
+    written_again = await apply_counters(
+        db_session, post, {"reactions": 5, "comments": 2}, "test"
     )
     await db_session.flush()
     assert written_again == 0
 
     # Приріст записується як різниця, а не як нове абсолютне значення
-    await _apply_counters(db_session, post, platform.id, {"reactions": 9}, "test")
+    await apply_counters(db_session, post, {"reactions": 9}, "test")
     await db_session.flush()
-    totals = await _recorded_totals(db_session, post.id)
+    totals = await recorded_totals(db_session, post.post_id)
     assert totals["reaction"] == 9
 
     events = (
         await db_session.execute(
-            TelemetryEvent.__table__.select().where(TelemetryEvent.post_id == post.id)
+            TelemetryEvent.__table__.select().where(TelemetryEvent.post_id == post.post_id)
         )
     ).all()
     reaction_values = sorted(
@@ -141,3 +102,11 @@ async def test_counters_are_converted_to_increments(db_session):
     assert reaction_values == [4.0, 5.0]  # 5 спочатку, потім приріст 4
 
     await db_session.rollback()
+
+
+def test_reward_weights_follow_platform_signals():
+    """Ваги нормуються за сигналами мережі: без переглядів реакції важать більше."""
+    full = reward_weights([])
+    no_views = reward_weights(["reactions", "comments", "shares"])
+    assert abs(sum(full[m] for m in ("views", "reactions", "comments", "saves", "shares")) - 1) < 1e-9
+    assert no_views["reactions"] > full["reactions"]

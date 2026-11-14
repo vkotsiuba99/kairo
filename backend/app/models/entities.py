@@ -34,14 +34,9 @@ class ConnectedAccount(Base):
     credentials_encrypted = Column(Text, nullable=True)  # AES-256-GCM encrypted
     connected_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     status = Column(String(32), default="active", nullable=False)  # active, disconnected, error
-    # Розклад публікацій каналу: {"mode": "auto"|"manual", "slots": [{"weekday": 0, "time": "09:00"}],
-    # "utc_offset": 2, "segment_id": null, "per_day": 2, "min_gap_minutes": 60}
-    posting_schedule = Column(CompatibleJSON, nullable=True, default=dict)
 
     platform = relationship("Platform", back_populates="accounts")
-    posts = relationship("Post", back_populates="connected_account", cascade="all, delete-orphan")
-    audience_profiles = relationship("AudienceProfile", back_populates="connected_account", cascade="all, delete-orphan")
-    audience_segments = relationship("AudienceSegment", back_populates="connected_account", cascade="all, delete-orphan")
+    publications = relationship("Publication", back_populates="account", cascade="all, delete-orphan")
 
 
 class ContentItem(Base):
@@ -63,16 +58,27 @@ class ContentItem(Base):
 
     platform = relationship("Platform", back_populates="content_items")
     generation_job = relationship("GenerationJob", foreign_keys=[generation_job_id], back_populates="content_item")
-    posts = relationship("Post", back_populates="content_item", cascade="all, delete-orphan")
     policy_decision = relationship("PolicyDecision", back_populates="content_item", uselist=False)
 
 
 class Post(Base):
+    """Черга публікацій сервісу Scheduler.
+
+    Матеріал і канал належать іншим сервісам, тому замість зовнішніх ключів тут
+    їхні ідентифікатори й копія того, що потрібно для публікації.
+    """
     __tablename__ = "posts"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    content_item_id = Column(Integer, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False, index=True)
-    connected_account_id = Column(Integer, ForeignKey("connected_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    content_item_id = Column(Integer, nullable=False, index=True)
+    connected_account_id = Column(Integer, nullable=False, index=True)
+    platform_code = Column(String(64), nullable=False, default="")
+    account_label = Column(String(256), nullable=True)
+    format = Column(String(64), nullable=False, default="text")
+    title = Column(String(256), nullable=True)
+    body = Column(Text, nullable=False, default="")
+    hashtags = Column(JsonList, default=list, nullable=False)
+    media_refs = Column(CompatibleJSON, default=dict, nullable=False)
     scheduled_at = Column(DateTime(timezone=True), nullable=False, index=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     external_post_id = Column(String(256), nullable=True)
@@ -81,43 +87,76 @@ class Post(Base):
     attempts = Column(Integer, default=0, nullable=False)       # спроби публікації (повтори з відкладенням)
     claimed_at = Column(DateTime(timezone=True), nullable=True)  # коли воркер захопив допис
 
-    content_item = relationship("ContentItem", back_populates="posts")
-    connected_account = relationship("ConnectedAccount", back_populates="posts")
-    telemetry_events = relationship("TelemetryEvent", back_populates="post", cascade="all, delete-orphan")
+
+class ChannelPlan(Base):
+    """Розклад публікацій каналу (сервіс Scheduler).
+
+    {"mode": "auto"|"manual", "slots": [{"weekday": 0, "time": "09:00"}],
+     "utc_offset": 2, "segment_id": null, "per_day": 2, "min_gap_minutes": 60}
+    """
+    __tablename__ = "channel_plans"
+
+    account_id = Column(Integer, primary_key=True)
+    schedule = Column(CompatibleJSON, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class Publication(Base):
+    """Журнал успішних публікацій сервісу Publishing — з нього опитуються лічильники."""
+    __tablename__ = "publications"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    post_id = Column(Integer, nullable=False, unique=True, index=True)
+    content_item_id = Column(Integer, nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("connected_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform_code = Column(String(64), nullable=False)
+    external_post_id = Column(String(256), nullable=True)
+    url = Column(String(512), nullable=True)
+    published_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+    account = relationship("ConnectedAccount", back_populates="publications")
+
+
+class TrackedPost(Base):
+    """Опубліковані дописи, відомі сервісу Telemetry з події post.published."""
+    __tablename__ = "tracked_posts"
+
+    post_id = Column(Integer, primary_key=True)
+    content_item_id = Column(Integer, nullable=False, index=True)
+    platform_code = Column(String(64), nullable=False, index=True)
+    external_post_id = Column(String(256), nullable=True, index=True)
+    counter_metrics = Column(JsonList, default=list, nullable=False)
+    published_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class TelemetryEvent(Base):
     __tablename__ = "telemetry_events"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True)
-    platform_id = Column(Integer, ForeignKey("platforms.id"), nullable=False, index=True)
+    post_id = Column(Integer, nullable=True, index=True)
+    platform_code = Column(String(64), nullable=False, index=True)
     event_type = Column(String(64), nullable=False, index=True)  # view, reaction, comment, save, share
     event_value = Column(Numeric(12, 4), default=1.0, nullable=False)
     occurred_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
     raw_payload = Column(CompatibleJSON, default=dict, nullable=False)
-
-    post = relationship("Post", back_populates="telemetry_events")
 
 
 class AudienceProfile(Base):
     __tablename__ = "audience_profiles"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    connected_account_id = Column(Integer, ForeignKey("connected_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    connected_account_id = Column(Integer, nullable=False, index=True)
     external_user_id = Column(String(256), nullable=False, index=True)
     first_seen = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     interest_embedding = Column(VectorType(768), nullable=True)
     engagement_features = Column(CompatibleJSON, default=dict, nullable=False)  # RFM stats, preferred formats
-
-    connected_account = relationship("ConnectedAccount", back_populates="audience_profiles")
 
 
 class AudienceSegment(Base):
     __tablename__ = "audience_segments"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    connected_account_id = Column(Integer, ForeignKey("connected_accounts.id", ondelete="CASCADE"), nullable=True, index=True)
+    connected_account_id = Column(Integer, nullable=True, index=True)
     label = Column(String(128), nullable=False)
     centroid = Column(VectorType(768), nullable=True)
     size = Column(Integer, default=0, nullable=False)
@@ -130,7 +169,6 @@ class AudienceSegment(Base):
     activity_hours = Column(CompatibleJSON, nullable=True, default=list)
     source = Column(String(32), default="manual", nullable=False)  # manual | clustering
 
-    connected_account = relationship("ConnectedAccount", back_populates="audience_segments")
     policy_decisions = relationship("PolicyDecision", back_populates="segment")
 
 
@@ -228,3 +266,29 @@ class GenerationJob(Base):
     error = Column(Text, nullable=True)
 
     content_item = relationship("ContentItem", back_populates="generation_job", uselist=False)
+
+
+class OutboxEvent(Base):
+    """Подія, записана в тій самій транзакції, що й зміна даних (transactional outbox).
+
+    Ретранслятор відправляє її в брокер і позначає sent_at; тому подія не губиться,
+    навіть якщо сервіс упав одразу після commit.
+    """
+    __tablename__ = "outbox_events"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    event_id = Column(String(64), unique=True, nullable=False)
+    event_type = Column(String(64), nullable=False, index=True)
+    payload = Column(CompatibleJSON, default=dict, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ProcessedEvent(Base):
+    """Оброблені вхідні події: повторна доставка тієї самої події нічого не змінює."""
+    __tablename__ = "processed_events"
+
+    event_id = Column(String(64), primary_key=True)
+    consumer = Column(String(32), primary_key=True)
+    processed_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

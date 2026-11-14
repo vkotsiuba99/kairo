@@ -18,7 +18,7 @@ class VideoComposer:
     Combines:
     1. Bonsai 27B script
     2. Bonsai Image keyframe stills
-    3. Ukrainian TTS audio (via worker-tts service or wave synthesizer)
+    3. Ukrainian TTS audio (endpoint /media/synthesize or wave synthesizer)
     4. ffmpeg assembly into MP4
     """
 
@@ -28,12 +28,12 @@ class VideoComposer:
 
     async def _synthesize_audio(self, text: str, output_wav_path: str) -> bool:
         """
-        Synthesizes Ukrainian speech audio via local worker-tts endpoint,
-        or creates a clean synthetic wav file if worker-tts is offline.
+        Synthesizes Ukrainian speech audio via the TTS endpoint of the Media service,
+        or creates a clean synthetic wav file if it is offline.
         """
         os.makedirs(os.path.dirname(os.path.abspath(output_wav_path)), exist_ok=True)
 
-        # Try worker-tts service
+        # Try the TTS endpoint
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(

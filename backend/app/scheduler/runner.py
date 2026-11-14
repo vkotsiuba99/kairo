@@ -1,16 +1,17 @@
 """
-Публікатор: черга публікацій поверх таблиці posts.
+Диспетчер черги сервісу Scheduler: черга публікацій поверх таблиці posts у БД сервісу.
 
-Окремий брокер (Kafka/Redpanda, RQ) тут не потрібен: публікації заплановані на
-майбутній час, їх можна скасувати й перепланувати, а стан кожної має бути видно
-в інтерфейсі — усе це вже є в таблиці posts. Тому таблиця і є чергою:
+Брокер (RabbitMQ) передає події між сервісами, але чергою дописів не є: публікації
+заплановані на майбутній час, їх можна скасувати й перепланувати, а стан кожної
+має бути видно в інтерфейсі — усе це вже є в таблиці posts. Тому таблиця і є чергою:
 
   pending ──claim──► publishing ──► published
      ▲                   │
      └── retry (backoff) ┴──► failed (після PUBLISH_MAX_ATTEMPTS)
 
 Захоплення атомарне (UPDATE … WHERE status='pending'), тож кілька реплік
-публікатора та планувальник усередині API не публікують той самий допис двічі.
+сервісу Scheduler не публікують той самий допис двічі; саму публікацію
+виконує сервіс Publishing.
 Допис, захоплений воркером, який упав, повертається в чергу за тайм-аутом.
 Гарантія — «щонайменше один раз»: падіння між відповіддю платформи і
 фіксацією в БД може дати повтор.
@@ -24,44 +25,44 @@ from typing import List
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.adapters.base import PublishResult
-from app.adapters.registry import get_adapter_for_account
+from app.core.clients import ServiceError, call
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.entities import ConnectedAccount, ContentItem, Post
+from app.models.entities import Post
 
 logger = logging.getLogger("kairo.scheduler")
 
 
-def _with_relations(stmt):
-    return stmt.options(
-        selectinload(Post.content_item).selectinload(ContentItem.platform),
-        selectinload(Post.connected_account).selectinload(ConnectedAccount.platform),
-    )
-
-
 async def publish_post(db: AsyncSession, post: Post) -> PublishResult:
     """
-    Єдина точка публікації допису (планувальник, «опублікувати зараз», студія).
-    Оновлює стан допису й матеріалу; commit робить викликач.
+    Єдина точка публікації допису (диспетчер черги, «опублікувати зараз», студія).
+
+    Саму публікацію виконує сервіс Publishing (там облікові дані й адаптери);
+    стан допису, повтори й захоплення лишаються тут. commit результату робить викликач.
     """
-    account, item = post.connected_account, post.content_item
-    if not account or not item:
-        result = PublishResult(success=False, error_message="The post has no channel or content")
-    else:
-        try:
-            result = await get_adapter_for_account(account).publish(
-                content_item_id=item.id,
-                title=item.title,
-                body=item.body,
-                media_refs=item.media_refs or {},
-                hashtags=item.hashtags or [],
-                format_type=item.format,
-            )
-        except Exception as e:  # адаптер не повинен валити воркер
-            result = PublishResult(success=False, error_message=str(e))
+    # транзакція не тримається відкритою, поки чекаємо на інший сервіс
+    await db.commit()
+    try:
+        res = await call("publishing", "POST", "/publishing/internal/publish", json={
+            "post_id": post.id,
+            "account_id": post.connected_account_id,
+            "content_item_id": post.content_item_id,
+            "title": post.title,
+            "body": post.body,
+            "hashtags": post.hashtags or [],
+            "media_refs": post.media_refs or {},
+            "format": post.format,
+        })
+        result = PublishResult(
+            success=bool(res.get("success")),
+            external_post_id=res.get("external_post_id"),
+            url=res.get("url"),
+            error_message=res.get("error_message"),
+        )
+    except ServiceError as e:  # Publishing недоступний — звичайна помилка спроби, буде повтор
+        result = PublishResult(success=False, error_message=str(e.detail))
 
     post.attempts = (post.attempts or 0) + 1
     if result.success:
@@ -69,7 +70,6 @@ async def publish_post(db: AsyncSession, post: Post) -> PublishResult:
         post.published_at = datetime.now(timezone.utc)
         post.external_post_id = result.external_post_id
         post.error_message = None
-        item.status = "published"
     else:
         post.error_message = result.error_message
     return result
@@ -108,7 +108,7 @@ async def claim_due_posts(db: AsyncSession, limit: int) -> List[int]:
 
 async def _publish_claimed(post_id: int, sem: asyncio.Semaphore) -> bool:
     async with sem, AsyncSessionLocal() as db:
-        post = (await db.execute(_with_relations(select(Post).where(Post.id == post_id)))).scalar_one()
+        post = (await db.execute(select(Post).where(Post.id == post_id))).scalar_one()
         result = await publish_post(db, post)
         if not result.success:
             if post.attempts < settings.PUBLISH_MAX_ATTEMPTS:

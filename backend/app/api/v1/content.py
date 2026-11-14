@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,8 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.models.entities import (
-    ContentItem, GenerationJob, Platform, AudienceSegment, PolicyDecision, Post, ConnectedAccount
+    ContentItem, GenerationJob, Platform, AudienceSegment, PolicyDecision, Experiment, SimulationRun
 )
+from fastapi.encoders import jsonable_encoder
+from app.core.activity import iso
+from app.core.clients import ServiceError, call
 from app.schemas.api import GenerateContentRequest, ContentItemResponse, ContentItemUpdateRequest
 from app.decision.policy_state import POLICY_VERSION, get_bandit
 from app.audience.features import build_context_vector
@@ -108,27 +110,21 @@ async def generate_content_endpoint(
     )
     db.add(policy_decision)
 
-    # 7. Optionally auto-schedule post
+    await db.commit()
+
+    # 7. Автопланування: допис ставить у чергу сервіс Scheduler
     scheduled_post_id = None
     if req.auto_schedule_minutes is not None:
-        from datetime import timedelta
-        # Find active connected account for platform
-        acc_res = await db.execute(
-            select(ConnectedAccount).where(ConnectedAccount.platform_id == platform.id)
-        )
-        account = acc_res.scalars().first()
-        if account:
-            post = Post(
-                content_item_id=content_item_id,
-                connected_account_id=account.id,
-                scheduled_at=datetime.now(timezone.utc) + timedelta(minutes=req.auto_schedule_minutes),
-                status="pending",
-            )
-            db.add(post)
-            await db.flush()
-            scheduled_post_id = post.id
-
-    await db.commit()
+        snapshot = await get_content_item(content_item_id, db)
+        try:
+            queued = await call("scheduler", "POST", "/schedule/internal/enqueue", json={
+                "content_item": jsonable_encoder(snapshot),
+                "delay_minutes": req.auto_schedule_minutes,
+            })
+            scheduled_post_id = queued["post"]["id"]
+        except ServiceError as e:
+            if e.status_code != 400:  # 400 — для мережі немає каналу: матеріал лишається без публікації
+                raise
 
     # Query created content item
     ci_res = await db.execute(
@@ -193,6 +189,107 @@ async def list_content_items(limit: int = 50, db: AsyncSession = Depends(get_db)
         )
         for ci in items
     ]
+
+
+@router.get("/internal/overview")
+async def content_overview(experiment_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
+    """Частина дашборду, що належить Content: експерименти, останні матеріали, стан моделей."""
+    import httpx
+    from sqlalchemy import func
+    from app.core.config import settings
+    from app.generation.llm_client import local_backend_state
+
+    total_experiments = (await db.execute(select(func.count(Experiment.id)))).scalar() or 0
+    if experiment_id:
+        run_stmt = select(SimulationRun).where(SimulationRun.experiment_id == experiment_id)
+    else:
+        run_stmt = select(SimulationRun).order_by(SimulationRun.id.desc())
+    latest_run = (await db.execute(run_stmt)).scalars().first()
+    recent = await list_content_items(limit=6, db=db)
+
+    # Наявність відповіді на /models ще не означає, що модель працює: LM Studio
+    # відповідає на перелік навіть тоді, коли жоден чекпоінт не піднімається.
+    # Тому враховується ще й запобіжник генерації.
+    server_reachable = False
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            server_reachable = (await client.get(f"{settings.LLM_BASE_URL}/models")).is_success
+    except Exception:
+        server_reachable = False
+    breaker = local_backend_state()
+    if not server_reachable:
+        llm_mode = "LM Studio server is not responding — running on the cloud fallback"
+    elif breaker["disabled"]:
+        llm_mode = (
+            f"Model {settings.LLM_MODEL_NAME} is not loading — running on the cloud fallback; "
+            f"retry in {breaker['seconds_left']} s"
+        )
+    else:
+        llm_mode = f"{settings.LLM_MODEL_NAME}, local GPU inference"
+
+    return {
+        "active_experiments": total_experiments,
+        "latest_experiment_summary": latest_run.results if latest_run else None,
+        "recent_content": jsonable_encoder(recent),
+        "llm_inference": {
+            "model": settings.LLM_MODEL_NAME,
+            "endpoint": settings.LLM_BASE_URL,
+            "online": server_reachable and not breaker["disabled"],
+            "server_reachable": server_reachable,
+            "mode": llm_mode,
+        },
+        "image_model": settings.IMAGE_MODEL_NAME,
+    }
+
+
+@router.get("/internal/activity")
+async def content_activity(limit: int = 200, db: AsyncSession = Depends(get_db)):
+    """Записи журналу подій: генерації, рішення політики, експерименти (зводить Telemetry)."""
+    entries = []
+    jobs = (
+        await db.execute(select(GenerationJob).order_by(GenerationJob.requested_at.desc()).limit(limit))
+    ).scalars().all()
+    for job in jobs:
+        failed = job.status == "failed"
+        entries.append({
+            "id": f"gen-{job.id}",
+            "at": iso(job.completed_at or job.requested_at),
+            "kind": "generation",
+            "level": "error" if failed else ("success" if job.status == "completed" else "info"),
+            "title": f"Generation job #{job.id}: {job.status}",
+            "detail": job.error or f"type: {job.content_type}, backend: {job.backend}, model: {job.model_name}",
+            "meta": {
+                "latency": f"{job.latency_ms} ms" if job.latency_ms else "—",
+                "cost": f"${float(job.cost_usd or 0):.4f}",
+            },
+        })
+    decisions = (
+        await db.execute(select(PolicyDecision).order_by(PolicyDecision.id.desc()).limit(limit))
+    ).scalars().all()
+    for dec in decisions:
+        arms = dec.chosen_arms or {}
+        entries.append({
+            "id": f"dec-{dec.id}",
+            "at": iso(dec.decided_at),
+            "kind": "decision",
+            "level": "info",
+            "title": f"Policy chose parameters for post #{dec.content_item_id}",
+            "detail": ", ".join(f"{k}: {v}" for k, v in arms.items()) or "—",
+            "meta": {"policy version": dec.policy_version or "—"},
+        })
+    experiments = (await db.execute(select(Experiment).order_by(Experiment.id.desc()).limit(limit))).scalars().all()
+    for exp in experiments:
+        cfg = exp.config or {}
+        entries.append({
+            "id": f"exp-{exp.id}",
+            "at": iso(exp.finished_at or exp.started_at),
+            "kind": "experiment",
+            "level": "success" if exp.finished_at else "info",
+            "title": f"Experiment #{exp.id}: {exp.name}",
+            "detail": f"rounds: {cfg.get('n_rounds', '—')}, seed: {cfg.get('seed', '—')}, α: {cfg.get('alpha', '—')}",
+            "meta": {},
+        })
+    return entries
 
 
 @router.get("/{item_id}", response_model=ContentItemResponse)
@@ -268,11 +365,6 @@ async def regenerate_image_endpoint(
     custom_prompt: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    import time
-    import os
-    from app.core.config import settings
-    from app.generation.image_generator import ImageGenerator
-
     res = await db.execute(
         select(ContentItem)
         .options(selectinload(ContentItem.platform), selectinload(ContentItem.policy_decision))
@@ -283,86 +375,32 @@ async def regenerate_image_endpoint(
         raise HTTPException(status_code=404, detail="Content item not found")
     # тема не зберігається в ContentItem (там лише тон, формат, обсяг) — її записано в рішенні політики
     topic = ((item.policy_decision.chosen_arms or {}).get("topic") if item.policy_decision else "") or ""
-
-    image_gen = ImageGenerator()
-    media_dir = os.path.join(settings.DATA_MEDIA_PATH, str(item.generation_job_id or item_id))
-    os.makedirs(media_dir, exist_ok=True)
-    img_path = os.path.join(media_dir, "keyframe_1.jpg")
-
     prompt = custom_prompt or (item.media_refs or {}).get("media_prompt") or item.title or "technology"
-    # Генератор синхронний (мережевий запит до 75 с, PIL) — в окремому потоці,
-    # інакше він зупиняє цикл подій і всі інші запити до API чекають.
-    await asyncio.to_thread(
-        image_gen.generate_image,
-        prompt=prompt,
-        output_path=img_path,
-        topic=topic,
-        title=item.title or "",
-    )
 
-    ts = int(time.time())
-    new_url = f"/media/{item.generation_job_id or item_id}/keyframe_1.jpg?t={ts}"
-    new_refs = dict(item.media_refs or {})
-    new_refs["image"] = img_path
-    new_refs["image_url"] = new_url
-    new_refs["media_prompt"] = prompt
-    item.media_refs = new_refs
-
+    image = await call("media", "POST", "/media/images", json={
+        "folder": str(item.generation_job_id or item_id),
+        "prompt": prompt,
+        "topic": topic,
+        "title": item.title or "",
+    })
+    item.media_refs = {**(item.media_refs or {}), **image}
     await db.commit()
-    return {"success": True, "image_url": new_url, "media_prompt": prompt}
+    return {"success": True, "image_url": image["image_url"], "media_prompt": image["media_prompt"]}
 
 
 @router.post("/{item_id}/publish")
 async def publish_content_item_endpoint(item_id: int, db: AsyncSession = Depends(get_db)):
-    from app.scheduler.runner import publish_post
-
-    res = await db.execute(
-        select(ContentItem)
-        .options(selectinload(ContentItem.platform))
-        .where(ContentItem.id == item_id)
-    )
-    item = res.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="Content item not found")
-
-    # Find connected account for this platform
-    acc_res = await db.execute(
-        select(ConnectedAccount)
-        .options(selectinload(ConnectedAccount.platform))
-        .where(ConnectedAccount.platform_id == item.platform_id)
-    )
-    account = acc_res.scalars().first()
-    if not account:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No connected account for {item.platform.display_name if item.platform else item.platform_id}"
-        )
-
-    # Допис створюється одразу як «публікується» і проходить той самий шлях,
-    # що й черга, тож телеметрія потім знайде його за external_post_id.
-    now = datetime.now(timezone.utc)
-    post = Post(
-        content_item_id=item.id,
-        connected_account_id=account.id,
-        scheduled_at=now,
-        status="publishing",
-        claimed_at=now,
-        attempts=0,
-    )
-    post.content_item, post.connected_account = item, account
-    db.add(post)
-    pub_result = await publish_post(db, post)
-    if not pub_result.success:
-        post.status = "failed"
-    await db.commit()
-
-    if not pub_result.success:
-        raise HTTPException(status_code=424, detail=pub_result.error_message or "Publishing failed")
+    """Публікує матеріал одразу: Scheduler ставить його в чергу й захоплює, Publishing публікує."""
+    item = await get_content_item(item_id, db)
+    res = await call("scheduler", "POST", "/schedule/internal/enqueue", json={
+        "content_item": jsonable_encoder(item),
+        "publish_now": True,
+    })
     return {
         "success": True,
-        "external_post_id": pub_result.external_post_id,
-        "url": pub_result.url,
-        "message": f"Published. ID: {pub_result.external_post_id}",
+        "external_post_id": res.get("external_post_id"),
+        "url": res.get("url"),
+        "message": f"Published. ID: {res.get('external_post_id')}",
     }
 
 @router.post("/topics/suggest")

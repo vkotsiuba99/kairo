@@ -1,15 +1,11 @@
-import os
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from sqlalchemy import select, update
 from app.core.database import AsyncSessionLocal
-from app.core.config import settings
 from app.models.entities import GenerationJob, ContentItem, Platform
 from app.generation.llm_client import MultiBackendLLMClient
-from app.generation.image_generator import ImageGenerator
-from app.generation.video_composer import VideoComposer
+from app.core.clients import call
 
 logger = logging.getLogger("kairo.worker")
 
@@ -26,12 +22,10 @@ async def process_generation_job_async(
     language: str = "en",
 ) -> Dict[str, Any]:
     """
-    Виконує завдання генерації в процесі API (асинхронно): текст — LLM-клієнт
-    з локальним/хмарним/офлайн-тиром, ілюстрація — у пулі потоків.
+    Виконує завдання генерації: текст — LLM-клієнт сервісу Content з
+    локальним/хмарним/офлайн-тиром, ілюстрацію й відео — сервіс Media.
     """
     llm_client = MultiBackendLLMClient()
-    image_gen = ImageGenerator()
-    video_comp = VideoComposer()
 
     async with AsyncSessionLocal() as session:
         # Mark job as processing
@@ -58,35 +52,22 @@ async def process_generation_job_async(
         media_refs = {}
         # 2. Generate visual assets (AI illustration for the post)
         try:
-            media_dir = os.path.join(settings.DATA_MEDIA_PATH, str(job_id))
-            os.makedirs(media_dir, exist_ok=True)
-
             img_prompt = t_result.content.media_suggestion or f"High quality cinematic digital artwork illustrating {topic}, 8k, photorealistic"
-            img_path = os.path.join(media_dir, "keyframe_1.jpg")
-            # синхронний генератор — в окремому потоці, щоб не блокувати цикл подій API
-            await asyncio.to_thread(
-                image_gen.generate_image,
-                prompt=img_prompt,
-                output_path=img_path,
-                topic=topic,
-                title=t_result.content.title or "",
-            )
-            media_refs["image"] = img_path
-            media_refs["image_url"] = f"/media/{job_id}/keyframe_1.jpg"
-            media_refs["media_prompt"] = img_prompt
+            media_refs.update(await call("media", "POST", "/media/images", json={
+                "folder": str(job_id),
+                "prompt": img_prompt,
+                "topic": topic,
+                "title": t_result.content.title or "",
+            }))
 
             # 3. If video, compose audio + frame
             if format_type == "video_short":
-                vid_path = os.path.join(media_dir, "video.mp4")
-                await video_comp.compose_video(
-                    script_text=t_result.content.body,
-                    keyframe_image_paths=[img_path],
-                    output_mp4_path=vid_path,
-                    is_vertical_shorts=True,
-                )
-                media_refs["video"] = vid_path
-                media_refs["video_url"] = f"/media/{job_id}/video.mp4"
-        except Exception as e:
+                media_refs.update(await call("media", "POST", "/media/videos", json={
+                    "folder": str(job_id),
+                    "script_text": t_result.content.body,
+                    "image": media_refs["image"],
+                }))
+        except Exception as e:  # без ілюстрації матеріал усе одно придатний до публікації
             logger.warning("Visual asset generation warning: %s", e)
 
         # 4. Save ContentItem and update GenerationJob
