@@ -69,14 +69,17 @@ async def test_redelivered_event_is_processed_once():
     from app.core.init_db import init_db
 
     await init_db()
+    import uuid
+
+    item_id = uuid.uuid4().int % 10**9  # база тестів спільна між запусками — ідентифікатор унікальний
     async with AsyncSessionLocal() as db:
-        decision = PolicyDecision(context_vector=[], chosen_arms={"topic": "x"}, content_item_id=987654)
+        decision = PolicyDecision(context_vector=[], chosen_arms={"topic": "x"}, content_item_id=item_id)
         db.add(decision)
         await db.commit()
         decision_id = decision.id
 
-    event = {"id": f"test-{decision_id}", "type": "reward.computed", "payload": {
-        "post_id": 1, "content_item_id": 987654, "reward": 0.5, "computed_at": "2026-11-14T12:00:00+00:00",
+    event = {"id": f"test-{item_id}", "type": "reward.computed", "payload": {
+        "post_id": 1, "content_item_id": item_id, "reward": 0.5, "computed_at": "2026-11-14T12:00:00+00:00",
     }}
     assert await events.dispatch("content", event) is True
     assert await events.dispatch("content", event) is False  # повторна доставка
@@ -85,3 +88,34 @@ async def test_redelivered_event_is_processed_once():
             select(func.count(PolicyReward.id)).where(PolicyReward.policy_decision_id == decision_id)
         )).scalar()
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_media_limits_concurrent_generations(monkeypatch):
+    """Media не бере більше MEDIA_CONCURRENCY генерацій одночасно — решта чекає в черзі."""
+    import asyncio
+    import threading
+    import time
+
+    from app.core.config import settings
+    from app.generation.image_generator import ImageGenerator
+
+    state = {"now": 0, "max": 0}
+    lock = threading.Lock()
+
+    def slow(self, prompt, output_path, **kwargs):
+        with lock:
+            state["now"] += 1
+            state["max"] = max(state["max"], state["now"])
+        time.sleep(0.2)
+        with lock:
+            state["now"] -= 1
+        return output_path
+
+    monkeypatch.setattr(ImageGenerator, "generate_image", slow)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        responses = await asyncio.gather(*(
+            ac.post("/api/v1/media/images", json={"folder": f"t{i}", "prompt": "p"}) for i in range(8)
+        ))
+    assert all(r.status_code == 200 for r in responses)
+    assert state["max"] == settings.MEDIA_CONCURRENCY

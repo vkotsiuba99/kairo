@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = ""
     OUTBOX_POLL_SECONDS: float = 1.0
     OUTBOX_BATCH_SIZE: int = 100
+    # Одночасних генерацій медіа на процес Media: решта чекає в черзі, а не забиває пам'ять
+    MEDIA_CONCURRENCY: int = 3
 
     # Security & Encryption for Connected Account credentials (AES-256-GCM)
     # Must be 32 bytes (e.g. 64 hex characters or 44 base64 chars)

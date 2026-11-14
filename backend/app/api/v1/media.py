@@ -41,6 +41,19 @@ class TTSRequest(BaseModel):
     voice: str = "ukrainian_female"
 
 
+# Обмеження одночасних генерацій на процес (зворотний тиск): без нього під навантаженням
+# кожен процес брав десятки рендерів і відео паралельно, пам'ять росла без меж, а
+# контейнери впиралися в ліміт. Семафор свій для кожного циклу подій (у тестах цикли різні).
+_slots: dict = {}
+
+
+def _slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    if id(loop) not in _slots:
+        _slots[id(loop)] = asyncio.Semaphore(settings.MEDIA_CONCURRENCY)
+    return _slots[id(loop)]
+
+
 def _media_dir(folder: str) -> str:
     # каталог — лише ім'я без шляху, щоб запит не вийшов за межі сховища
     path = os.path.join(settings.DATA_MEDIA_PATH, os.path.basename(folder) or "misc")
@@ -55,13 +68,14 @@ async def generate_image(req: ImageRequest):
     folder = os.path.basename(req.folder) or "misc"
     img_path = os.path.join(_media_dir(folder), "keyframe_1.jpg")
     # синхронний генератор (мережевий запит до 75 с, PIL) — в окремому потоці
-    await asyncio.to_thread(
-        ImageGenerator().generate_image,
-        prompt=req.prompt,
-        output_path=img_path,
-        topic=req.topic,
-        title=req.title,
-    )
+    async with _slot():
+        await asyncio.to_thread(
+            ImageGenerator().generate_image,
+            prompt=req.prompt,
+            output_path=img_path,
+            topic=req.topic,
+            title=req.title,
+        )
     return {
         "image": img_path,
         # параметр t скидає кеш браузера після повторної генерації
@@ -76,12 +90,13 @@ async def generate_video(req: VideoRequest):
 
     folder = os.path.basename(req.folder) or "misc"
     vid_path = os.path.join(_media_dir(folder), "video.mp4")
-    await VideoComposer().compose_video(
-        script_text=req.script_text,
-        keyframe_image_paths=[req.image],
-        output_mp4_path=vid_path,
-        is_vertical_shorts=True,
-    )
+    async with _slot():
+        await VideoComposer().compose_video(
+            script_text=req.script_text,
+            keyframe_image_paths=[req.image],
+            output_mp4_path=vid_path,
+            is_vertical_shorts=True,
+        )
     return {"video": vid_path, "video_url": f"/media/{folder}/video.mp4"}
 
 
