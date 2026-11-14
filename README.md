@@ -163,15 +163,16 @@ docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml \
 docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml \
     run --rm --no-deps loadgen python scripts/loadtest.py --setup --users 50 --duration 300 \
     --base-url http://gateway/api/v1 --out results/load/v2/u50
-# chaos, from the host, in parallel with the load:
-python backend/scripts/chaos.py --project kairo --services content scheduler publishing
+# chaos, from the host, in parallel with the load — whole-service outages one after another:
+python backend/scripts/chaos.py --project kairo --plan 40:publishing:60,125:content:45,190:rabbitmq:40,250:scheduler:30
 # clean up images and volumes afterwards:
 docker compose -p kairo -f docker-compose.yml -f docker-compose.loadtest.yml down -v --rmi all
 ```
 
 `loadtest.py` writes per-request logs, a per-second timeline and a summary (RPS, p50/p95/p99,
-error rate, published posts). `chaos.py` kills a random container with `docker kill`, keeps it
-down and starts it again, logging every event.
+error rate, published posts). `chaos.py` kills containers with `docker kill`, keeps them down and
+starts them again, logging every event: either a random replica at random intervals or, with `--plan`,
+all replicas of one service at a time (a whole-service outage).
 
 `scripts/load_report.py <run dir>` turns a run into the table numbers (RPS, p95, errors, lost and
 duplicate posts, publish lag); `scripts/load_model.py` extrapolates measured runs with operational laws
@@ -192,7 +193,7 @@ video encoding); PostgreSQL needs ≤ 0.014 core·s, so growth beyond this point
 separate video worker, not a bigger database. The first runs exposed four defects, all fixed: missing
 `greenlet` (`sqlalchemy[asyncio]`), ffmpeg and the WAV fallback blocking the event loop, OpenBLAS
 spinning 16 threads per process (`OPENBLAS_NUM_THREADS=1` in the image), and `docker compose run`
-resetting the API scale (`--no-deps`). Larger runs and the chaos scenario were not executed locally.
+resetting the API scale (`--no-deps`). Larger runs were not executed locally.
 
 Version 2 (six services) on the same machine: content 3 replicas, scheduler, publishing and media 2 each,
 telemetry and trends 1, two uvicorn workers per replica, 300 s (`backend/results/load/v2`):
@@ -212,6 +213,30 @@ memory. The first v2 run (`v2/u50_unbounded`) exposed a fifth defect: the media 
 concurrent generations, each process rendered dozens of images and videos at once and the containers
 peaked at 2.7 GB; `MEDIA_CONCURRENCY` (3 per process) fixed it. Only the 50-user scenario was measured;
 100–400 users are the operational-law model (`v2/model.json`).
+
+Chaos run (`v2/chaos50`): 50 users, 300 s, whole-service outages one after another (all replicas killed):
+
+| Service down | Failing operations | Working operations | Published during / 60 s after |
+|---|---|---|---|
+| publishing, 64 s | none | all six | 0 / 295 |
+| content, 49 s | generate, feed, enqueue (98–100 %) | dashboard, queue view, telemetry | 296 / 89 |
+| rabbitmq, 43 s | practically none (enqueue 0.6 %) | all | 89 / 45 |
+| scheduler, 35 s | queue view, enqueue (100 %) | feed, generate, dashboard, telemetry | 0 / 41 |
+
+An outage hits only the operations that need the failed service. While publishing is down the queue
+keeps accepting posts and publishes the backlog when it is back; while the broker is down events wait
+in the outboxes. After the run all services agree: 481 posts published in the scheduler, 481 items
+marked published in content, 481 tracked in telemetry, 481 in the publishing log; nothing lost or
+failed, outboxes empty (2 duplicates, at-least-once). A restarted service is fully back in about 20 s
+(process start plus the gateway's 10 s DNS cache).
+
+Earlier runs of this scenario (`v2/chaos50_*`) exposed four resilience defects, all fixed: posts were
+marked failed after three attempts while publishing was merely down (an unavailable service no longer
+spends attempts); enqueueing depended on publishing (the scheduler keeps the channel list in its own
+database, refreshed at start and every 30 s); a service could not start while the broker was down
+(the broker connection is established in the background); and calls to a dead service, waiting on slow
+DNS lookups of its name, exhausted the thread pool and slowed calls to healthy services (a half-open
+circuit breaker now answers "unavailable" for 5 s and lets a single probe through).
 
 ## Deployment
 
